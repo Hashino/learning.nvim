@@ -68,20 +68,20 @@ function AI.suggestion(diff, callback)
 
     if there's a better way of doing this in the language, return a summary of the change and the edit to apply in the following json format:
     {
-      "summary": string, // a summary of the change in markdown format
+      "summary": string, // a summary of the change in markdown format. also show a snippet of the change that is going to be applied in a codeblock of the language. start the message with things like: "Try this", "Consider this" or "Did you that {language} lets you do this in this way?". Be educational, but not pretentious. Link to the official documentation of the language whenever possible.
       "edit": {
         "start": integer, // start line of the edit (0-indexed). The change starts at line ]] ..
-      tostring(diff.start) .. [[
-        "final": integer, // final line of the edit (0-indexed, exclusive)
-        "content": string[], // content of the edit to replace the lines from start to final
+    tostring(diff.start) .. [[
+          "final": integer, // final line of the edit (0-indexed, exclusive)
+          "content": string[], // content of the edit to replace the lines from start to final
       }
     }
 
     use the paramter ]]
-      ..
-      tostring(config.options.eagerness)
-      ..
-      [[ to determine how eager you are to make a suggestion. 0 means never suggest anything, 1 means always suggest something if there's any possible improvement.
+    ..
+    tostring(config.options.eagerness)
+    ..
+    [[ to determine how eager you are to make a suggestion. 0 means never suggest anything, 1 means always suggest something if there's any possible improvement.
 
     make suggestion only if there's an obvious language feature that can be used that the user isn't using.
     make the suggestion only about the changed lines.
@@ -90,36 +90,65 @@ function AI.suggestion(diff, callback)
 
   local headers, body, is_anthropic = build_request(prompt)
 
-  vim.net.request(config.options.provider.api_url, {
-    method = "POST",
-    headers = headers,
-    body = body,
-  }, function(err, response)
-    if err then
-      vim.notify("[learning.nvim] AI request failed: " .. tostring(err), vim.log.levels.ERROR)
-      return
-    end
+  local cmd = { "curl", "-s", "-X", "POST", config.options.provider.api_url }
+  for k, v in pairs(headers) do
+    table.insert(cmd, "-H")
+    table.insert(cmd, k .. ": " .. v)
+  end
+  table.insert(cmd, "-d")
+  table.insert(cmd, body)
 
-    local ok, decoded = pcall(vim.json.decode, response.body)
-    if not ok then
-      vim.notify("[learning.nvim] failed to decode response", vim.log.levels.ERROR)
-      return
-    end
+  vim.fn.jobstart(cmd, {
+    stdout_buffered = true,
+    stderr_buffered = true,
+    on_stdout = function(_, data, _)
+      if data then
+        vim.schedule(function()
+          local output = table.concat(data, "")
+          local ok, decoded = pcall(vim.json.decode, output)
+          if not ok then
+            vim.notify("[learning.nvim] failed to decode response: " .. output, vim.log.levels.ERROR)
+            return
+          end
 
-    local content = extract_content(decoded, is_anthropic)
-    if content then
-      local ok, suggestion = pcall(vim.json.decode, content)
+          local content = extract_content(decoded, is_anthropic)
+          if content then
+            local ok, suggestion = pcall(vim.json.decode, content)
 
-      if not ok then
-        vim.notify("[learning.nvim] failed to decode suggestion content", vim.log.levels.ERROR)
-        return
-      else
-        vim.schedule(function() callback(suggestion) end)
+            if not ok then
+              vim.notify("[learning.nvim] failed to decode suggestion content", vim.log.levels.ERROR)
+              return
+            else
+              callback(suggestion)
+            end
+          else
+            vim.notify("[learning.nvim] unexpected response shape", vim.log.levels.WARN)
+          end
+        end)
       end
-    else
-      vim.notify("[learning.nvim] unexpected response shape", vim.log.levels.WARN)
-    end
-  end)
+    end,
+    on_stderr = function(_, data, _)
+      vim.schedule(function()
+        if data then
+          local err_str = table.concat(data, "")
+          if err_str ~= "" then
+            vim.notify("[learning.nvim] AI request failed (stderr): " .. err_str, vim.log.levels.ERROR)
+          else
+            vim.notify("[learning.nvim] AI request failed (stderr: empty)", vim.log.levels.ERROR)
+          end
+        else
+          vim.notify("[learning.nvim] AI request failed (stderr: nil)", vim.log.levels.ERROR)
+        end
+      end)
+    end,
+    on_exit = function(_, code, _)
+      if code ~= 0 then
+        vim.schedule(function()
+          vim.notify("[learning.nvim] AI request exited with code: " .. code, vim.log.levels.WARN)
+        end)
+      end
+    end,
+  })
 end
 
 return AI

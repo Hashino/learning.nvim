@@ -111,15 +111,15 @@ function Learning.show(toedit, suggestion)
   end
 
   local buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, suggestion.summary)
+  local summary_lines = vim.split(suggestion.summary, "\n", { plain = true })
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, summary_lines)
+  pcall(function()
+    vim.api.nvim_buf_set_option(buf, "filetype", "markdown")
+    -- Explicitly disable treesitter for this buffer
+    vim.treesitter.stop(buf)
+  end)
 
-  -- options of the buffer
-  vim.api.nvim_set_option_value('modifiable', false, { buf = buf })
-  vim.api.nvim_set_option_value('readonly', true, { buf = buf })
-  vim.api.nvim_set_option_value('buftype', 'nofile', { buf = buf })
-  vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = buf })
-  vim.api.nvim_set_option_value('filetype', 'markdown', { buf = buf })
-
+  local win_config = config.options.win_config
 
   vim.keymap.set("n", config.options.keys.confirm, function()
     vim.api.nvim_buf_set_lines(toedit, suggestion.edit.start, suggestion.edit.final, false,
@@ -130,7 +130,10 @@ function Learning.show(toedit, suggestion)
     Learning.win_id = vim.api.nvim_win_close(Learning.win_id, true)
   end, { buffer = buf, })
 
-  Learning.win_id = vim.api.nvim_open_win(buf, false, config.options.win_config)
+  Learning.win_id = vim.api.nvim_open_win(buf, true, win_config)
+  vim.api.nvim_win_set_option(Learning.win_id, "winbar",
+    string.format(" %s to accept | %s to dismiss",
+      config.options.keys.confirm, config.options.keys.dismiss))
 end
 
 return Learning
