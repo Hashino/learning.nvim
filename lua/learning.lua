@@ -29,13 +29,17 @@ local function compute_diff(old, new)
     return nil
   end
 
-  local context = 3
+  local context = 10
   local from = math.max(1, start_line - context)
   local to = math.min(#new, end_line + context)
 
+  local old_from = math.max(1, start_line - context)
+  local old_to = math.min(#old, end_line + context)
+
   return {
     start = from - 1,
-    content = vim.list_slice(new, from, to),
+    old_content = vim.list_slice(old, old_from, old_to),
+    new_content = vim.list_slice(new, from, to),
   }
 end
 

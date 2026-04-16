@@ -49,16 +49,22 @@ end
 
 ---@class AIDiff
 ---@field start integer start line of the change (0-indexed)
----@field content string[] content of the changed lines
+---@field old_content string[] content of the old lines
+---@field new_content string[] content of the new lines
 
 ---@param diff AIDiff diff containing changed lines
 ---@param callback fun(suggestion: LearningSuggestion?) callback
 function AI.suggestion(diff, callback)
-  local content = table.concat(diff.content, "\n")
+  local old_content = table.concat(diff.old_content, "\n")
+  local new_content = table.concat(diff.new_content, "\n")
   local prompt = [[
-    given this change (context around the changed lines):
+    given this change:
 
-    ]] .. content .. [[
+    old code:
+    ]] .. old_content .. [[
+
+    new code:
+    ]] .. new_content .. [[
 
     if there's a better way of doing this in the language, return a summary of the change and the edit to apply in the following json format:
     {
