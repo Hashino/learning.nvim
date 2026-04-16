@@ -72,7 +72,10 @@ function AI.suggestion(diff, callback)
     }
 
     use the paramter ]]
-  config.options.eagerness [[ to determine how eager you are to make a suggestion. 0 means never suggest anything, 1 means always suggest something if there's any possible improvement.
+      ..
+      tostring(config.options.eagerness)
+      ..
+      [[ to determine how eager you are to make a suggestion. 0 means never suggest anything, 1 means always suggest something if there's any possible improvement.
 
     make suggestion only if there's an obvious language feature that can be used that the user isn't using.
     make the suggestion only about the changed lines.
