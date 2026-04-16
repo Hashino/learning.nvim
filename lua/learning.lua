@@ -1,17 +1,11 @@
-local config   = require("learning.config")
-local ai       = require("learning.ai")
+local config = require("learning.config")
+local ai     = require("learning.ai")
 
 local Learning = {
-  buf = {
-    old = nil,
-    new = nil,
-  },
-
-  win_id = nil,
-
+  buf = { old = nil, new = nil, },
+  win = nil,
   enabled = true,
-
-  au_group = vim.api.nvim_create_augroup("Learning", { clear = true, }),
+  augroup = vim.api.nvim_create_augroup("Learning", { clear = true, }),
 }
 
 local function compute_diff(old, new)
@@ -25,14 +19,11 @@ local function compute_diff(old, new)
     end
   end
 
-  if start_line > #old then
-    return nil
-  end
+  if start_line > #old then return nil end
 
   local context = 10
   local from = math.max(1, start_line - context)
   local to = math.min(#new, end_line + context)
-
   local old_from = math.max(1, start_line - context)
   local old_to = math.min(#old, end_line + context)
 
@@ -43,97 +34,96 @@ local function compute_diff(old, new)
   }
 end
 
----@param opts LearningOptions
+--- setup learning.nvim
+---@param opts? learning.Config
 function Learning.setup(opts)
-  config.options = vim.tbl_deep_extend("force", config.default_opts, opts or {})
+  config.options = vim.tbl_deep_extend("force", config.options, opts or {})
 
-  if config.options.provider.api_url == "" or config.options.provider.model == "" or config.options.provider.api_key == "" then
-    vim.notify("[learning.nvim] provider api_url, model must be set", vim.log.levels.ERROR)
+  if config.options.provider.api_url == ""
+     or config.options.provider.model == ""
+     or config.options.provider.api_key == "" then
+    vim.notify("[learning.nvim] provider api_url, model and api_key must be set",
+      vim.log.levels.ERROR)
     return
   end
 
+  -- snapshot buffer content on enter so we can diff on InsertLeave
   vim.api.nvim_create_autocmd("BufEnter", {
-    group = Learning.au_group,
+    group = Learning.augroup,
     callback = function()
-      if not Learning.enabled then
-        return
-      end
+      if not Learning.enabled then return end
 
       local buf = vim.api.nvim_get_current_buf()
-
       if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
         Learning.buf.new = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
       end
-    end
+    end,
   })
 
   vim.api.nvim_create_autocmd("InsertLeave", {
-    group = Learning.au_group,
+    group = Learning.augroup,
     callback = function()
-      if not Learning.enabled then
+      if not Learning.enabled then return end
+
+      local buf = vim.api.nvim_get_current_buf()
+      if not (vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)) then
         return
       end
 
-      local buf = vim.api.nvim_get_current_buf()
-      if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
-        Learning.buf.old = Learning.buf.new
-        Learning.buf.new = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+      Learning.buf.old = Learning.buf.new
+      Learning.buf.new = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
 
-        if Learning.buf.old == Learning.buf.new then
-          return
-        end
+      if Learning.buf.old == Learning.buf.new then return end
 
-        local diff = compute_diff(Learning.buf.old, Learning.buf.new)
-        if not diff then
-          return
-        end
+      local diff = compute_diff(Learning.buf.old, Learning.buf.new)
+      if not diff then return end
 
-        vim.schedule(function()
-          local function show_suggestion(suggestion)
-            if suggestion then
-              local toedit = vim.api.nvim_get_current_buf()
-              Learning.show(toedit, suggestion)
-            end
+      vim.schedule(function()
+        ai.suggestion(diff, function(suggestion)
+          if suggestion then
+            Learning.show(vim.api.nvim_get_current_buf(), suggestion)
           end
-
-          ai.suggestion(diff, show_suggestion)
         end)
-      end
+      end)
     end,
   })
 end
 
----Shows a floating window with the summary of the edit and the option to apply it or dismiss it.
----@param suggestion LearningSuggestion
+--- shows a floating window with the suggestion summary and option to apply it
+---@param toedit integer buffer to apply the edit to
+---@param suggestion learning.Suggestion
 function Learning.show(toedit, suggestion)
-  if Learning.win_id then
-    Learning.win_id = vim.api.nvim_win_close(Learning.win_id, true)
+  if Learning.win then
+    pcall(vim.api.nvim_win_close, Learning.win, true)
+    Learning.win = nil
   end
 
   local buf = vim.api.nvim_create_buf(false, true)
-  local summary_lines = vim.split(suggestion.summary, "\n", { plain = true })
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, summary_lines)
-  pcall(function()
-    vim.api.nvim_buf_set_option(buf, "filetype", "markdown")
-    -- Explicitly disable treesitter for this buffer
-    vim.treesitter.stop(buf)
-  end)
+  local summary_lines = vim.split(suggestion.summary, "\n", { plain = true, })
 
-  local win_config = config.options.win_config
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, summary_lines)
+
+  -- TODO: use treesitter highlighting once the markdown codeblock crash is fixed
+  -- https://github.com/nvim-treesitter/nvim-treesitter/issues/...
+  vim.api.nvim_set_option_value("syntax", "markdown", { buf = buf, })
 
   vim.keymap.set("n", config.options.keys.confirm, function()
     vim.api.nvim_buf_set_lines(toedit, suggestion.edit.start, suggestion.edit.final, false,
       suggestion.edit.content)
+    pcall(vim.api.nvim_win_close, Learning.win, true)
+    Learning.win = nil
   end, { buffer = buf, })
 
   vim.keymap.set("n", config.options.keys.dismiss, function()
-    Learning.win_id = vim.api.nvim_win_close(Learning.win_id, true)
+    pcall(vim.api.nvim_win_close, Learning.win, true)
+    Learning.win = nil
   end, { buffer = buf, })
 
-  Learning.win_id = vim.api.nvim_open_win(buf, true, win_config)
-  vim.api.nvim_win_set_option(Learning.win_id, "winbar",
+  Learning.win = vim.api.nvim_open_win(buf, true, config.options.win_config)
+  vim.api.nvim_set_option_value("winbar",
     string.format(" %s to accept | %s to dismiss",
-      config.options.keys.confirm, config.options.keys.dismiss))
+      config.options.keys.confirm, config.options.keys.dismiss),
+    { win = Learning.win, })
 end
 
 return Learning

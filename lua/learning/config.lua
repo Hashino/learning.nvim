@@ -1,53 +1,38 @@
 local Config = {}
 
-
 local HEIGHT = 25
 local WIDTH = 75
 
----@class LearningOptions
----@field enabled boolean wether plugin is enabled
----@field keys LearningKeys keymaps for the plugin
----@field provider LearningOptionsProvider provider options for the ai provider
----@field win_config table window config for the edit window
-Config.default_opts = {
-  eagerness = 0.5, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions but also more false positives
+---@class learning.Config
+---@field eagerness? number how eager the plugin is to suggest (0 to 1)
+---@field provider? learning.Config.Provider provider options for the ai
+---@field keys? learning.Config.Keys keymaps for the suggestion window
+---@field win_config? vim.api.keyset.win_config window config for the suggestion window
+Config.options = {
+  eagerness = 0.5,
 
-  ---@class LearningOptionsProvider
+  ---@class learning.Config.Provider
   ---@field api_key string api key for the provider
   ---@field api_url string api url for the provider
   ---@field model string model to use for the provider
-  provider = {
-    api_key = "",
-    api_url = "",
-    model = "",
-  },
+  provider = { api_key = "", api_url = "", model = "", },
 
-  ---@class LearningKeys
-  ---@field confirm string keymap to confirm the task
-  ---@field dismiss string keymap to dismiss the task
-  keys = {
-    confirm = "<S-CR>",
-    dismiss = "<Esc>",
-  },
+  ---@class learning.Config.Keys
+  ---@field confirm string keymap to accept the suggestion
+  ---@field dismiss string keymap to dismiss the suggestion
+  keys = { confirm = "<S-CR>", dismiss = "<Esc>", },
 
-
-  -- window configs of the floating tasks editor
   -- see :h nvim_open_win() for available options
   win_config = {
     relative = "editor",
-
     width = WIDTH,
     height = HEIGHT,
     col = vim.o.columns - WIDTH,
     row = vim.o.lines - 3 - vim.o.cmdheight - HEIGHT,
-
     style = "minimal",
     border = "rounded",
-
     noautocmd = true,
   },
 }
-
-Config.options = Config.default_opts
 
 return Config

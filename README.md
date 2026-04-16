@@ -32,7 +32,7 @@ lazy.nvim:
 vim.pack:
 ```lua
 vim.pack.add({ "https://github.com/Hashino/learning.nvim", })
-require("doing").setup({
+require("learning").setup({
   eagerness = 0.5, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
 
   provider = {
