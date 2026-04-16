@@ -46,7 +46,7 @@ require("doing").setup({
 example config: 
 ```lua
 require("learning").setup({
-  eagerness = 0.5, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions but also more false positives
+  eagerness = 0.5, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
 
   provider = {
     api_url = "https://api.openai.com/v1/chat/completions",
