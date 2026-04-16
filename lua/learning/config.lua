@@ -10,7 +10,7 @@ local WIDTH = 75
 ---@field provider LearningOptionsProvider provider options for the ai provider
 ---@field win_config table window config for the edit window
 Config.default_opts = {
-  enabled = true,
+  eagerness = 0.5, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions but also more false positives
 
   ---@class LearningOptionsProvider
   ---@field api_key string api key for the provider

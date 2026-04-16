@@ -41,4 +41,19 @@ require("doing").setup({
 })
 ```
 
+## config
+
+example config: 
+```lua
+require("learning").setup({
+  eagerness = 0.5, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions but also more false positives
+
+  provider = {
+    api_url = "https://api.openai.com/v1/chat/completions",
+    api_key = "sk_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    model = "gpt-5.4",
+  },
+})
+```
+
 [see the source code for default options](https://github.com/Hashino/learning.nvim/blob/main/lua/learning/config.lua)

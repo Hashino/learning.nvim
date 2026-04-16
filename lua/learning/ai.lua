@@ -65,11 +65,14 @@ function AI.suggestion(diff, callback)
       "summary": string, // a summary of the change in markdown format
       "edit": {
         "start": integer, // start line of the edit (0-indexed). The change starts at line ]] ..
-  tostring(diff.start) .. [[
+      tostring(diff.start) .. [[
         "final": integer, // final line of the edit (0-indexed, exclusive)
         "content": string[], // content of the edit to replace the lines from start to final
       }
     }
+
+    use the paramter ]]
+  config.options.eagerness [[ to determine how eager you are to make a suggestion. 0 means never suggest anything, 1 means always suggest something if there's any possible improvement.
 
     make suggestion only if there's an obvious language feature that can be used that the user isn't using.
     make the suggestion only about the changed lines.
