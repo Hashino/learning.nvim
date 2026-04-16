@@ -9,7 +9,7 @@
 
 learn the language features naturally as you use it
 
-![demo][demo.gif]
+![demo](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo.gif)
 
 ## installation
 
