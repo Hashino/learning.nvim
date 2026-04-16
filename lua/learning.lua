@@ -39,7 +39,7 @@ end
 function Learning.setup(opts)
   config.options = vim.tbl_deep_extend("force", config.default_opts, opts or {})
 
-  if config.options.provider.api_url == "" or config.options.provider.model == "" or config.options.provider.api_key then
+  if config.options.provider.api_url == "" or config.options.provider.model == "" or config.options.provider.api_key == "" then
     vim.notify("[learning.nvim] provider api_url, model must be set", vim.log.levels.ERROR)
     return
   end
