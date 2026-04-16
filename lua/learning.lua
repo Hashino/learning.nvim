@@ -10,6 +10,31 @@ local Learning = {
   win = nil,
 }
 
+local function compute_diff(old, new)
+  local start_line = math.huge
+  local end_line = 0
+
+  for i = 1, math.max(#old, #new) do
+    if old[i] ~= new[i] then
+      start_line = math.min(start_line, i)
+      end_line = math.max(end_line, i)
+    end
+  end
+
+  if start_line > #old then
+    return nil
+  end
+
+  local context = 3
+  local from = math.max(1, start_line - context)
+  local to = math.min(#new, end_line + context)
+
+  return {
+    start = from - 1,
+    content = vim.list_slice(new, from, to),
+  }
+end
+
 ---@param opts LearningOptions
 function Learning.setup(opts)
   config.options = vim.tbl_deep_extend("force", config.default_opts, opts or {})
@@ -36,6 +61,15 @@ function Learning.setup(opts)
         Learning.buf.old = Learning.buf.new
         Learning.buf.new = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
 
+        if Learning.buf.old == Learning.buf.new then
+          return
+        end
+
+        local diff = compute_diff(Learning.buf.old, Learning.buf.new)
+        if not diff then
+          return
+        end
+
         vim.schedule(function()
           local function show_suggestion(suggestion)
             if suggestion then
@@ -44,7 +78,7 @@ function Learning.setup(opts)
             end
           end
 
-          ai.suggestion(Learning.buf.old, Learning.buf.new, show_suggestion)
+          ai.suggestion(diff, show_suggestion)
         end)
       end
     end,

@@ -47,31 +47,31 @@ end
 ---@field final integer final line of the edit
 ---@field content string[] the content of the edit
 
----@param old string[] old content of the buffer
----@param new string[] new content of the buffer
----@return LearningSuggestion suggestion
-function AI.suggestion(old, new, callback)
+---@class AIDiff
+---@field start integer start line of the change (0-indexed)
+---@field content string[] content of the changed lines
+
+---@param diff AIDiff diff containing changed lines
+---@param callback fun(suggestion: LearningSuggestion?) callback
+function AI.suggestion(diff, callback)
+  local content = table.concat(diff.content, "\n")
   local prompt = [[
-    given this change:
+    given this change (context around the changed lines):
 
-    <old>
-    ]] .. table.concat(old, "\n") .. [[
-    </old>
-
-    <new>
-    ]] .. table.concat(new, "\n") .. [[
-    </new>
+    ]] .. content .. [[
 
     if there's a better way of doing this in the language, return a summary of the change and the edit to apply in the following json format:
     {
       "summary": string, // a summary of the change in markdown format
       "edit": {
-        "start": integer, // start line of the edit (0-indexed)
+        "start": integer, // start line of the edit (0-indexed). The change starts at line ]] .. tostring(diff.start) .. [[
         "final": integer, // final line of the edit (0-indexed, exclusive)
-        "content": string[], // content of the edit
+        "content": string[], // content of the edit to replace the lines from start to final
       }
     }
 
+    make suggestion only if there's an obvious language feature that can be used or a common best practice that is not being followed.
+    make the suggestion only about the changed lines.
     otherwise, return nothing
   ]]
 
