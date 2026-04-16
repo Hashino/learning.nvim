@@ -7,7 +7,11 @@ local Learning = {
     new = nil,
   },
 
-  win = nil,
+  win_id = nil,
+
+  enabled = true,
+
+  au_group = vim.api.nvim_create_augroup("Learning", { clear = true, }),
 }
 
 local function compute_diff(old, new)
@@ -45,7 +49,12 @@ function Learning.setup(opts)
   end
 
   vim.api.nvim_create_autocmd("BufEnter", {
+    group = Learning.au_group,
     callback = function()
+      if not Learning.enabled then
+        return
+      end
+
       local buf = vim.api.nvim_get_current_buf()
 
       if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
@@ -55,7 +64,12 @@ function Learning.setup(opts)
   })
 
   vim.api.nvim_create_autocmd("InsertLeave", {
+    group = Learning.au_group,
     callback = function()
+      if not Learning.enabled then
+        return
+      end
+
       local buf = vim.api.nvim_get_current_buf()
       if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
         Learning.buf.old = Learning.buf.new
@@ -88,8 +102,8 @@ end
 ---Shows a floating window with the summary of the edit and the option to apply it or dismiss it.
 ---@param suggestion LearningSuggestion
 function Learning.show(toedit, suggestion)
-  if Learning.win then
-    Learning.win = vim.api.nvim_win_close(Learning.win, true)
+  if Learning.win_id then
+    Learning.win_id = vim.api.nvim_win_close(Learning.win_id, true)
   end
 
   local buf = vim.api.nvim_create_buf(false, true)
@@ -109,10 +123,10 @@ function Learning.show(toedit, suggestion)
   end, { buffer = buf, })
 
   vim.keymap.set("n", config.options.keys.dismiss, function()
-    Learning.win = vim.api.nvim_win_close(Learning.win, true)
+    Learning.win_id = vim.api.nvim_win_close(Learning.win_id, true)
   end, { buffer = buf, })
 
-  Learning.win = vim.api.nvim_open_win(buf, false, config.options.win_config)
+  Learning.win_id = vim.api.nvim_open_win(buf, false, config.options.win_config)
 end
 
 return Learning

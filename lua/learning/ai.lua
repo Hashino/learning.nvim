@@ -13,23 +13,23 @@ local function extract_content(body, is_anthropic)
 end
 
 local function build_request(prompt)
-  local is_anthropic = config.provider.api_url:find("anthropic%.com")
+  local is_anthropic = config.options.provider.api_url:find("anthropic%.com")
 
   local headers = { ["Content-Type"] = "application/json" }
   local body
 
   if is_anthropic then
-    headers["x-api-key"] = config.provider.api_key
+    headers["x-api-key"] = config.options.provider.api_key
     headers["anthropic-version"] = "2023-06-01"
     body = vim.json.encode({
-      model = config.provider.model,
+      model = config.options.provider.model,
       max_tokens = 1024,
       messages = { { role = "user", content = prompt } },
     })
   else
-    headers["Authorization"] = "Bearer " .. config.provider.api_key
+    headers["Authorization"] = "Bearer " .. config.options.provider.api_key
     body = vim.json.encode({
-      model = config.provider.model,
+      model = config.options.provider.model,
       messages = { { role = "user", content = prompt } },
     })
   end
@@ -84,7 +84,7 @@ function AI.suggestion(diff, callback)
 
   local headers, body, is_anthropic = build_request(prompt)
 
-  vim.net.request(config.provider.api_url, {
+  vim.net.request(config.options.provider.api_url, {
     method = "POST",
     headers = headers,
     body = body,
