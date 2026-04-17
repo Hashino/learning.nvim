@@ -5,7 +5,7 @@ local WIDTH = 75
 
 ---@class learning.Config
 ---@field eagerness? number how eager the plugin is to suggest (0 to 1)
----@field provider? learning.Config.Provider provider options for the ai
+---@field provider learning.Config.Provider provider options for the ai
 ---@field keys? learning.Config.Keys keymaps for the suggestion window
 ---@field win_config? vim.api.keyset.win_config window config for the suggestion window
 Config.options = {
