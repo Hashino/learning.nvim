@@ -7,7 +7,7 @@
 
 # learning.nvim
 
-learn the language features naturally as you use it
+learn the language features naturally as code
 
 ![demo](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo.gif)
 
@@ -39,7 +39,7 @@ vim.pack:
 ```lua
 vim.pack.add({ "https://github.com/Hashino/learning.nvim", })
 require("learning").setup({
-  eagerness = 0.25, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
+  eagerness = 0.5, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
 
   provider = {
     api_key = "", -- your API key. be careful putting it in your dotfiles
