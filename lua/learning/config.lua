@@ -25,12 +25,16 @@ Config.options = {
   -- see :h nvim_open_win() for available options
   win_config = {
     relative = "editor",
+
     width = WIDTH,
     height = HEIGHT,
+
     col = vim.o.columns - WIDTH,
     row = vim.o.lines - 3 - vim.o.cmdheight - HEIGHT,
+
     style = "minimal",
     border = "rounded",
+
     noautocmd = true,
   },
 }
