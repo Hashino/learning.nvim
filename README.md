@@ -7,15 +7,15 @@
 
 # learning.nvim
 
-learn the language features naturally as code
+learn the language features naturally as you code
 
 ![demo](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo.gif)
 
 ## commands
 
-`:Learning disable` disables the plugin
-`:Learning enable` enables the plugin
-`:Learning toggle` toggles the plugin on and off
+- `:Learning disable` disables the plugin
+- `:Learning enable` enables the plugin
+- `:Learning toggle` toggles the plugin on and off
 
 ## installation
 
