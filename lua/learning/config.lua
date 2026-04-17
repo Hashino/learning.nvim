@@ -9,7 +9,7 @@ local WIDTH = 75
 ---@field keys? learning.Config.Keys keymaps for the suggestion window
 ---@field win_config? vim.api.keyset.win_config window config for the suggestion window
 Config.options = {
-  eagerness = 0.5,
+  eagerness = 0.25,
 
   ---@class learning.Config.Provider
   ---@field api_key string api key for the provider
