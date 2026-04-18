@@ -1,15 +1,9 @@
 local learning = require("learning")
 
 local do_cmds  = {
-  ["enable"] = function()
-    learning.enabled = true
-  end,
-  ["disable"] = function()
-    learning.enabled = false
-  end,
-  ["toggle"] = function()
-    learning.enabled = not learning.enabled
-  end,
+  ["enable"]  = learning.enable,
+  ["disable"] = learning.disable,
+  ["toggle"]  = learning.toggle,
 }
 
 -- sets up the `:Learning` command

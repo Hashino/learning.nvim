@@ -130,4 +130,16 @@ function Learning.show(toedit, suggestion)
     { win = Learning.win_id, })
 end
 
+function Learning.enable()
+  Learning.enabled = true
+end
+
+function Learning.disable()
+  Learning.enabled = false
+end
+
+function Learning.toggle()
+  Learning.enabled = not Learning.enabled
+end
+
 return Learning
