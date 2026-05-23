@@ -9,7 +9,9 @@
 
 learn the language features naturally as you code
 
-![demo](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo.gif)
+![demo1](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo1.gif)
+
+![demo2](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo2.gif)
 
 ## commands
 
@@ -48,6 +50,12 @@ require("learning").setup({
     model = "", -- the model you want to use, should be specified in the docs of your provider
   },
 })
+```
+
+## keymap example
+
+```lua
+vim.keymap.set("v", "<leader>le", require("learning").explain, { desc = "Explain selected code" })
 ```
 
 ## config
