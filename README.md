@@ -13,6 +13,7 @@ learn the language features naturally as you code
 
 ## commands
 
+- `:Learning explain` explains the visually selected code using AI
 - `:Learning disable` disables the plugin
 - `:Learning enable` enables the plugin
 - `:Learning toggle` toggles the plugin on and off
