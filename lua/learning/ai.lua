@@ -57,13 +57,13 @@ local function make_ai_request(prompt, callback)
         if not ok then return end
 
         local content = extract_content(decoded, is_anthropic)
-        if not content then return end
+        if type(content) ~= "string" then return end
 
         local cok, suggestion = pcall(vim.json.decode, content)
         if cok then
           callback(suggestion)
         elseif content then
-          callback(content)
+          callback({ summary = tostring(content) })
         end
       end)
     end,

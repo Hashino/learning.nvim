@@ -97,45 +97,47 @@ end
 ---@param toedit integer buffer to apply the edit to
 ---@param suggestion learning.Suggestion
 function Learning.show(toedit, suggestion)
-  if Learning.win_id then
-    pcall(vim.api.nvim_win_close, Learning.win_id, true)
-    Learning.win_id = nil
-  end
+  if suggestion then
+    if Learning.win_id then
+      pcall(vim.api.nvim_win_close, Learning.win_id, true)
+      Learning.win_id = nil
+    end
 
-  local buf = vim.api.nvim_create_buf(false, true)
-  local summary_lines = vim.split(suggestion.summary, "\n", { plain = true, })
+    local buf = vim.api.nvim_create_buf(false, true)
+    local summary_lines = vim.split(suggestion.summary, "\n", { plain = true, })
 
-  vim.api.nvim_buf_set_lines(buf, 0, -1, false, summary_lines)
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, summary_lines)
 
-  -- TODO: use treesitter highlighting once the markdown codeblock crash is fixed
-  -- https://github.com/nvim-treesitter/nvim-treesitter/issues/...
-  vim.api.nvim_set_option_value("syntax", "markdown", { buf = buf, })
+    -- TODO: use treesitter highlighting once the markdown codeblock crash is fixed
+    -- https://github.com/nvim-treesitter/nvim-treesitter/issues/...
+    vim.api.nvim_set_option_value("syntax", "markdown", { buf = buf, })
 
-  if suggestion.edit then
-    vim.keymap.set("n", config.options.keys.confirm, function()
-      vim.api.nvim_buf_set_lines(toedit, suggestion.edit.start, suggestion.edit.final, false,
-        suggestion.edit.content)
+    if suggestion.edit then
+      vim.keymap.set("n", config.options.keys.confirm, function()
+        vim.api.nvim_buf_set_lines(toedit, suggestion.edit.start, suggestion.edit.final, false,
+          suggestion.edit.content)
+        pcall(vim.api.nvim_win_close, Learning.win_id, true)
+        Learning.win_id = nil
+      end, { buffer = buf, })
+    end
+
+    vim.keymap.set("n", config.options.keys.dismiss, function()
       pcall(vim.api.nvim_win_close, Learning.win_id, true)
       Learning.win_id = nil
     end, { buffer = buf, })
-  end
 
-  vim.keymap.set("n", config.options.keys.dismiss, function()
-    pcall(vim.api.nvim_win_close, Learning.win_id, true)
-    Learning.win_id = nil
-  end, { buffer = buf, })
+    Learning.win_id = vim.api.nvim_open_win(buf, true, config.options.win_config)
 
-  Learning.win_id = vim.api.nvim_open_win(buf, true, config.options.win_config)
-
-  if suggestion.edit then
-    vim.api.nvim_set_option_value("winbar",
-      string.format(" %s to accept | %s to dismiss",
-        config.options.keys.confirm, config.options.keys.dismiss),
-      { win = Learning.win_id, })
-  else
-    vim.api.nvim_set_option_value("winbar",
-      string.format(" %s to dismiss", config.options.keys.dismiss),
-      { win = Learning.win_id, })
+    if suggestion.edit then
+      vim.api.nvim_set_option_value("winbar",
+        string.format(" %s to accept | %s to dismiss",
+          config.options.keys.confirm, config.options.keys.dismiss),
+        { win = Learning.win_id, })
+    else
+      vim.api.nvim_set_option_value("winbar",
+        string.format(" %s to dismiss", config.options.keys.dismiss),
+        { win = Learning.win_id, })
+    end
   end
 end
 
@@ -164,18 +166,18 @@ function Learning.explain()
     start_pos, end_pos = end_pos, start_pos
   end
 
-  local lines = vim.api.nvim_buf_get_lines(0, start_pos[1]-1, end_pos[1], false)
+  local lines = vim.api.nvim_buf_get_lines(0, start_pos[1] - 1, end_pos[1], false)
   if #lines == 0 then
     vim.notify("[learning.nvim] No selection to explain", vim.log.levels.WARN)
     return
   end
 
   if mode == "v" or mode == "\22" then
-    lines[1] = string.sub(lines[1], start_pos[2]+1)
+    lines[1] = string.sub(lines[1], start_pos[2] + 1)
     if #lines == 1 then
-      lines[#lines] = string.sub(lines[#lines], 1, end_pos[2]-start_pos[2])
+      lines[#lines] = string.sub(lines[#lines], 1, end_pos[2] - start_pos[2])
     else
-      lines[#lines] = string.sub(lines[#lines], 1, end_pos[2]+1)
+      lines[#lines] = string.sub(lines[#lines], 1, end_pos[2] + 1)
     end
   end
 
