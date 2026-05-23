@@ -86,37 +86,25 @@ end
 ---@field new_content string[] content of the new lines
 
 ---@param diff learning.Diff
+---@param filetype string filetype of the buffer being edited
 ---@param callback fun(suggestion: learning.Suggestion?)
-function AI.suggestion(diff, callback)
+function AI.suggestion(diff, filetype, callback)
   local old_content = table.concat(diff.old_content, "\n")
   local new_content = table.concat(diff.new_content, "\n")
 
-  local prompt = [[
-given this change:
+  local prompt = [[Given this change in ]] .. filetype .. [[:
 
-old code:
+--- old
 ]] .. old_content .. [[
 
-new code:
+--- new
 ]] .. new_content .. [[
 
-if there's a better way of doing this in the language, return a summary of the change and the edit to apply in the following json format:
-{
-  "summary": string, // a summary of the change in markdown format. also show a snippet of the change that is going to be applied in a codeblock of the language. start the message with things like: "Try this", "Consider this" or "Did you that {language} lets you do this in this way?". Be educational, but not pretentious. Link to the official documentation of the language whenever possible.
-  "edit": {
-    "start": integer, // start line of the edit (0-indexed). The change starts at line ]] ..
-      tostring(diff.start) .. [[
+If there's a more idiomatic way in ]] .. filetype .. [[, return JSON:
+{"summary": "markdown tip with code snippet", "edit": {"start": ]] ..
+  tostring(diff.start) .. [[, "final": integer, "content": [...]}, "importance": 0.0-1.0}
 
-    "final": integer, // final line of the edit (0-indexed, exclusive)
-    "content": string[], // content of the edit to replace the lines from start to final
-  }
-  "importance": number, // a number between 0 and 1 indicating how important this suggestion is. 0 means the suggestion is just a matter of taste with no measurable improvement, 1 means it's a critical improvement that should be made.
-}
-
-make suggestion only if there's an obvious language feature that can be used that the user isn't using.
-make the suggestion only about the changed lines.
-be direct and concise.
-otherwise, return nothing
+Only suggest if an obvious language feature is being missed. Be concise. Otherwise return nothing.
 ]]
 
   make_ai_request(prompt, callback)

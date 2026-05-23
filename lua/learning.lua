@@ -2,14 +2,9 @@ local config   = require("learning.config")
 local ai       = require("learning.ai")
 
 local Learning = {
-  buf = {
-    old = nil,
-    new = nil,
-  },
-
   win_id = nil,
-
   enabled = true,
+  debounce_timer = nil,
 
   augroup = vim.api.nvim_create_augroup("Learning", { clear = true, }),
 }
@@ -25,7 +20,7 @@ local function compute_diff(old, new)
     end
   end
 
-  if start_line > #old then return nil end
+  if start_line == math.huge then return nil end
 
   local context = 10
   local from = math.max(1, start_line - context)
@@ -38,6 +33,51 @@ local function compute_diff(old, new)
     old_content = vim.list_slice(old, old_from, old_to),
     new_content = vim.list_slice(new, from, to),
   }
+end
+
+local function send_suggestion()
+  if not Learning.enabled then return end
+
+  local buf = vim.api.nvim_get_current_buf()
+  if not (vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)) then
+    return
+  end
+
+  vim.b.learning_new = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+
+  if vim.b.learning_old == nil then
+    vim.b.learning_old = vim.b.learning_new
+    return
+  end
+
+  local diff = compute_diff(vim.b.learning_old, vim.b.learning_new)
+  if not diff then return end
+
+  local filetype = vim.bo[buf].filetype
+
+  ai.suggestion(diff, filetype, function(suggestion)
+    if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
+      vim.b[buf].learning_old = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    end
+    if suggestion and 1 - (suggestion.importance or 0) >= config.options.eagerness then
+      Learning.show(buf, suggestion)
+    end
+  end)
+end
+
+local function debounce()
+  if Learning.debounce_timer then
+    ---@diagnostic disable-next-line: undefined-field
+    Learning.debounce_timer:stop()
+  end
+  local timer = vim.loop.new_timer()
+  if not timer then return end
+  Learning.debounce_timer = timer
+  timer:start(config.options.debounce_ms, 0, vim.schedule_wrap(function()
+    if Learning.debounce_timer ~= timer then return end
+    Learning.debounce_timer = nil
+    send_suggestion()
+  end))
 end
 
 --- setup learning.nvim
@@ -53,13 +93,23 @@ function Learning.setup(opts)
     return
   end
 
-  -- snapshot buffer content on enter so we can diff on InsertLeave
   vim.api.nvim_create_autocmd("BufEnter", {
     group = Learning.augroup,
     callback = function()
       local buf = vim.api.nvim_get_current_buf()
       if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
-        Learning.buf.new = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        local content = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        vim.b.learning_old = content
+        vim.b.learning_new = content
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP", "TextChanged" }, {
+    group = Learning.augroup,
+    callback = function()
+      if Learning.enabled then
+        debounce()
       end
     end,
   })
@@ -68,26 +118,7 @@ function Learning.setup(opts)
     group = Learning.augroup,
     callback = function()
       if Learning.enabled then
-        local buf = vim.api.nvim_get_current_buf()
-        if not (vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)) then
-          return
-        end
-
-        Learning.buf.old = Learning.buf.new
-        Learning.buf.new = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-
-        if Learning.buf.old == Learning.buf.new then return end
-
-        local diff = compute_diff(Learning.buf.old, Learning.buf.new)
-        if not diff then return end
-
-        vim.schedule(function()
-          ai.suggestion(diff, function(suggestion)
-            if suggestion and 1 - suggestion.importance >= config.options.eagerness then
-              Learning.show(vim.api.nvim_get_current_buf(), suggestion)
-            end
-          end)
-        end)
+        debounce()
       end
     end,
   })
@@ -123,6 +154,9 @@ function Learning.show(toedit, suggestion)
       vim.keymap.set("n", config.options.keys.confirm, function()
         vim.api.nvim_buf_set_lines(toedit, suggestion.edit.start, suggestion.edit.final, false,
           suggestion.edit.content)
+        if vim.api.nvim_buf_is_valid(toedit) and vim.api.nvim_buf_is_loaded(toedit) then
+          vim.b[toedit].learning_old = vim.api.nvim_buf_get_lines(toedit, 0, -1, false)
+        end
         pcall(vim.api.nvim_win_close, Learning.win_id, true)
         Learning.win_id = nil
       end, { buffer = buf, })
@@ -146,8 +180,11 @@ function Learning.explain()
     return
   end
 
-  local start_pos = vim.api.nvim_buf_get_mark(0, "<")
-  local end_pos = vim.api.nvim_buf_get_mark(0, ">")
+  local buf = vim.api.nvim_get_current_buf()
+  if not (vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)) then return end
+
+  local start_pos = vim.api.nvim_buf_get_mark(buf, "<")
+  local end_pos = vim.api.nvim_buf_get_mark(buf, ">")
 
   if start_pos[1] == 0 and end_pos[1] == 0 then
     local v_start = vim.fn.getpos("v")
@@ -164,7 +201,7 @@ function Learning.explain()
     start_pos, end_pos = end_pos, start_pos
   end
 
-  local lines = vim.api.nvim_buf_get_lines(0, start_pos[1] - 1, end_pos[1], false)
+  local lines = vim.api.nvim_buf_get_lines(buf, start_pos[1] - 1, end_pos[1], false)
   if #lines == 0 then
     vim.notify("[learning.nvim] No selection to explain", vim.log.levels.WARN)
     return
@@ -183,9 +220,7 @@ function Learning.explain()
 
   ai.explain(selection, function(explanation)
     if explanation then
-      Learning.show(vim.api.nvim_get_current_buf(), {
-        summary = explanation,
-      })
+      Learning.show(buf, { summary = explanation })
     end
   end)
 end
