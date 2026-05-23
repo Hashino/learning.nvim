@@ -72,7 +72,7 @@ end
 
 ---@class learning.Suggestion
 ---@field summary string summary of the edit (markdown)
----@field edit learning.Edit edit to apply if the user accepts
+---@field edit? learning.Edit edit to apply if the user accepts
 
 ---@class learning.Edit
 ---@field start integer start line of the edit (0-indexed)
@@ -111,7 +111,9 @@ if there's a better way of doing this in the language, return a summary of the c
   }
 }
 
-use the parameter ]] .. tostring(config.options.eagerness) .. [[ to determine how likely you are to make a suggestion. 0 means never suggest anything, 1 means always suggest something. if the value is close to 0, only make a suggestion if there's a very obvious language feature that can be used that the user isn't using. if the value is close to 1, make a suggestion for any non-trivial change.
+use the parameter ]] ..
+      tostring(config.options.eagerness) ..
+      [[ to determine how likely you are to make a suggestion. 0 means never suggest anything, 1 means always suggest something. if the value is close to 0, only make a suggestion if there's a very obvious language feature that can be used that the user isn't using. if the value is close to 1, make a suggestion for any non-trivial change.
 
 make suggestion only if there's an obvious language feature that can be used that the user isn't using.
 make the suggestion only about the changed lines.
@@ -122,12 +124,13 @@ otherwise, return nothing
   make_ai_request(prompt, callback)
 end
 
---- 
+---
 ---@param code string code to explain
 ---@param callback fun(explanation: string?) callback to receive the explanation.
 function AI.explain(code, callback)
   local prompt = [[
-  explain this code in a concise way: ]] .. code
+  explain this code in a concise way. focus on explaining any language features being used that are particular to this language: ]] ..
+  code
 
   make_ai_request(prompt, function(suggestion)
     if type(suggestion) == "string" then
