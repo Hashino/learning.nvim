@@ -112,15 +112,6 @@ function Learning.show(toedit, suggestion)
     -- https://github.com/nvim-treesitter/nvim-treesitter/issues/...
     vim.api.nvim_set_option_value("syntax", "markdown", { buf = buf, })
 
-    if suggestion.edit then
-      vim.keymap.set("n", config.options.keys.confirm, function()
-        vim.api.nvim_buf_set_lines(toedit, suggestion.edit.start, suggestion.edit.final, false,
-          suggestion.edit.content)
-        pcall(vim.api.nvim_win_close, Learning.win_id, true)
-        Learning.win_id = nil
-      end, { buffer = buf, })
-    end
-
     vim.keymap.set("n", config.options.keys.dismiss, function()
       pcall(vim.api.nvim_win_close, Learning.win_id, true)
       Learning.win_id = nil
@@ -129,6 +120,13 @@ function Learning.show(toedit, suggestion)
     Learning.win_id = vim.api.nvim_open_win(buf, true, config.options.win_config)
 
     if suggestion.edit then
+      vim.keymap.set("n", config.options.keys.confirm, function()
+        vim.api.nvim_buf_set_lines(toedit, suggestion.edit.start, suggestion.edit.final, false,
+          suggestion.edit.content)
+        pcall(vim.api.nvim_win_close, Learning.win_id, true)
+        Learning.win_id = nil
+      end, { buffer = buf, })
+
       vim.api.nvim_set_option_value("winbar",
         string.format(" %s to accept | %s to dismiss",
           config.options.keys.confirm, config.options.keys.dismiss),
