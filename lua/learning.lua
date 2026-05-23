@@ -111,12 +111,14 @@ function Learning.show(toedit, suggestion)
   -- https://github.com/nvim-treesitter/nvim-treesitter/issues/...
   vim.api.nvim_set_option_value("syntax", "markdown", { buf = buf, })
 
-  vim.keymap.set("n", config.options.keys.confirm, function()
-    vim.api.nvim_buf_set_lines(toedit, suggestion.edit.start, suggestion.edit.final, false,
-      suggestion.edit.content)
-    pcall(vim.api.nvim_win_close, Learning.win_id, true)
-    Learning.win_id = nil
-  end, { buffer = buf, })
+  if suggestion.edit then
+    vim.keymap.set("n", config.options.keys.confirm, function()
+      vim.api.nvim_buf_set_lines(toedit, suggestion.edit.start, suggestion.edit.final, false,
+        suggestion.edit.content)
+      pcall(vim.api.nvim_win_close, Learning.win_id, true)
+      Learning.win_id = nil
+    end, { buffer = buf, })
+  end
 
   vim.keymap.set("n", config.options.keys.dismiss, function()
     pcall(vim.api.nvim_win_close, Learning.win_id, true)
@@ -124,10 +126,68 @@ function Learning.show(toedit, suggestion)
   end, { buffer = buf, })
 
   Learning.win_id = vim.api.nvim_open_win(buf, true, config.options.win_config)
-  vim.api.nvim_set_option_value("winbar",
-    string.format(" %s to accept | %s to dismiss",
-      config.options.keys.confirm, config.options.keys.dismiss),
-    { win = Learning.win_id, })
+
+  if suggestion.edit then
+    vim.api.nvim_set_option_value("winbar",
+      string.format(" %s to accept | %s to dismiss",
+        config.options.keys.confirm, config.options.keys.dismiss),
+      { win = Learning.win_id, })
+  else
+    vim.api.nvim_set_option_value("winbar",
+      string.format(" %s to dismiss", config.options.keys.dismiss),
+      { win = Learning.win_id, })
+  end
+end
+
+function Learning.explain()
+  local mode = vim.fn.visualmode()
+  if mode == nil then
+    vim.notify("[learning.nvim] No previous visual selection", vim.log.levels.WARN)
+    return
+  end
+
+  local start_pos = vim.api.nvim_buf_get_mark(0, "<")
+  local end_pos = vim.api.nvim_buf_get_mark(0, ">")
+
+  if start_pos[1] == 0 and end_pos[1] == 0 then
+    local v_start = vim.fn.getpos("v")
+    local v_end = vim.fn.getpos(".")
+    start_pos = { v_start[2], v_start[3] - 1 }
+    end_pos = { v_end[2], v_end[3] - 1 }
+  end
+
+  if mode == "V" then
+    start_pos[2] = 0
+  end
+
+  if start_pos[1] > end_pos[1] or (start_pos[1] == end_pos[1] and start_pos[2] > end_pos[2]) then
+    start_pos, end_pos = end_pos, start_pos
+  end
+
+  local lines = vim.api.nvim_buf_get_lines(0, start_pos[1]-1, end_pos[1], false)
+  if #lines == 0 then
+    vim.notify("[learning.nvim] No selection to explain", vim.log.levels.WARN)
+    return
+  end
+
+  if mode == "v" or mode == "\22" then
+    lines[1] = string.sub(lines[1], start_pos[2]+1)
+    if #lines == 1 then
+      lines[#lines] = string.sub(lines[#lines], 1, end_pos[2]-start_pos[2])
+    else
+      lines[#lines] = string.sub(lines[#lines], 1, end_pos[2]+1)
+    end
+  end
+
+  local selection = table.concat(lines, "\n")
+
+  ai.explain(selection, function(explanation)
+    if explanation then
+      Learning.show(vim.api.nvim_get_current_buf(), {
+        summary = explanation,
+      })
+    end
+  end)
 end
 
 function Learning.enable()

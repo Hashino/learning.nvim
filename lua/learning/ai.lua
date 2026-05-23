@@ -35,6 +35,41 @@ local function build_request(prompt)
   return headers, body, is_anthropic
 end
 
+local function make_ai_request(prompt, callback)
+  local headers, body, is_anthropic = build_request(prompt)
+
+  local cmd = { "curl", "-s", "-X", "POST", config.options.provider.api_url, }
+  for k, v in pairs(headers) do
+    table.insert(cmd, "-H")
+    table.insert(cmd, k .. ": " .. v)
+  end
+  table.insert(cmd, "-d")
+  table.insert(cmd, body)
+
+  vim.fn.jobstart(cmd, {
+    stdout_buffered = true,
+    on_stdout = function(_, data, _)
+      if not data then return end
+
+      vim.schedule(function()
+        local output = table.concat(data, "")
+        local ok, decoded = pcall(vim.json.decode, output)
+        if not ok then return end
+
+        local content = extract_content(decoded, is_anthropic)
+        if not content then return end
+
+        local cok, suggestion = pcall(vim.json.decode, content)
+        if cok then
+          callback(suggestion)
+        elseif content then
+          callback(content)
+        end
+      end)
+    end,
+  })
+end
+
 ---@class learning.Suggestion
 ---@field summary string summary of the edit (markdown)
 ---@field edit learning.Edit edit to apply if the user accepts
@@ -69,50 +104,40 @@ if there's a better way of doing this in the language, return a summary of the c
   "summary": string, // a summary of the change in markdown format. also show a snippet of the change that is going to be applied in a codeblock of the language. start the message with things like: "Try this", "Consider this" or "Did you that {language} lets you do this in this way?". Be educational, but not pretentious. Link to the official documentation of the language whenever possible.
   "edit": {
     "start": integer, // start line of the edit (0-indexed). The change starts at line ]] ..
-    tostring(diff.start) .. [[
+      tostring(diff.start) .. [[
 
     "final": integer, // final line of the edit (0-indexed, exclusive)
     "content": string[], // content of the edit to replace the lines from start to final
   }
 }
 
-use the parameter ]] .. tostring(config.options.eagerness) .. [[ to determine how eager you are to make a suggestion. 0 means never suggest anything, 1 means always suggest something if there's any possible improvement.
+use the parameter ]] .. tostring(config.options.eagerness) .. [[ to determine how likely you are to make a suggestion. 0 means never suggest anything, 1 means always suggest something. if the value is close to 0, only make a suggestion if there's a very obvious language feature that can be used that the user isn't using. if the value is close to 1, make a suggestion for any non-trivial change.
 
 make suggestion only if there's an obvious language feature that can be used that the user isn't using.
 make the suggestion only about the changed lines.
+be direct and concise.
 otherwise, return nothing
 ]]
 
-  local headers, body, is_anthropic = build_request(prompt)
+  make_ai_request(prompt, callback)
+end
 
-  local cmd = { "curl", "-s", "-X", "POST", config.options.provider.api_url, }
-  for k, v in pairs(headers) do
-    table.insert(cmd, "-H")
-    table.insert(cmd, k .. ": " .. v)
-  end
-  table.insert(cmd, "-d")
-  table.insert(cmd, body)
+--- 
+---@param code string code to explain
+---@param callback fun(explanation: string?) callback to receive the explanation.
+function AI.explain(code, callback)
+  local prompt = [[
+  explain this code in a concise way: ]] .. code
 
-  vim.fn.jobstart(cmd, {
-    stdout_buffered = true,
-    on_stdout = function(_, data, _)
-      if not data then return end
-
-      vim.schedule(function()
-        local output = table.concat(data, "")
-        local ok, decoded = pcall(vim.json.decode, output)
-        if not ok then return end
-
-        local content = extract_content(decoded, is_anthropic)
-        if not content then return end
-
-        local cok, suggestion = pcall(vim.json.decode, content)
-        if cok then
-          callback(suggestion)
-        end
-      end)
-    end,
-  })
+  make_ai_request(prompt, function(suggestion)
+    if type(suggestion) == "string" then
+      callback(suggestion)
+    elseif suggestion and suggestion.summary then
+      callback(suggestion.summary)
+    else
+      callback(nil)
+    end
+  end)
 end
 
 return AI

@@ -1,6 +1,7 @@
 local learning = require("learning")
 
 local do_cmds  = {
+  ["explain"] = learning.explain,
   ["enable"]  = learning.enable,
   ["disable"] = learning.disable,
   ["toggle"]  = learning.toggle,
@@ -16,6 +17,7 @@ vim.api.nvim_create_user_command("Learning", function(args)
     vim.notify("[learning.nvim] Invalid command: " .. cmd, vim.log.levels.ERROR)
   end
 end, {
+  range = true,
   nargs = "?",
   bang = true,
   complete = function(_, cmd_line)
@@ -26,3 +28,4 @@ end, {
     end
   end,
 })
+
