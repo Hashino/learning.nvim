@@ -28,6 +28,7 @@ lazy.nvim:
   "Hashino/learning.nvim",
   opts = {
       eagerness = 0.25, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
+      debounce_ms = 250, -- debounce interval in ms before sending accumulated edits
 
       provider = {
         api_key = "", -- your API key. be careful putting it in your dotfiles
@@ -43,6 +44,7 @@ vim.pack:
 vim.pack.add({ "https://github.com/Hashino/learning.nvim", })
 require("learning").setup({
   eagerness = 0.25, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
+  debounce_ms = 250, -- debounce interval in ms before sending accumulated edits
 
   provider = {
     api_key = "", -- your API key. be careful putting it in your dotfiles
@@ -57,6 +59,10 @@ require("learning").setup({
 ```lua
 vim.keymap.set("v", "<leader>le", require("learning").explain, { desc = "Explain selected code" })
 ```
+
+## how it works
+
+After each edit, the plugin snapshots the buffer and computes a diff to detect what changed. After a configurable debounce period of inactivity (`debounce_ms`), the changed lines (with surrounding context) are sent to an AI provider, which returns a relevant language tip as a structured suggestion. The suggestion is shown in a floating window — press `keys.confirm` to accept the edit or `keys.dismiss` to dismiss. An `eagerness` setting (0–1) controls how selectively suggestions are shown based on the AI's reported importance.
 
 ## config
 
