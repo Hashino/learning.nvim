@@ -73,6 +73,7 @@ end
 ---@class learning.Suggestion
 ---@field summary string summary of the edit (markdown)
 ---@field edit? learning.Edit edit to apply if the user accepts
+---@field importance? number between 0 and 1 indicating how important this suggestion is.
 
 ---@class learning.Edit
 ---@field start integer start line of the edit (0-indexed)
@@ -109,11 +110,8 @@ if there's a better way of doing this in the language, return a summary of the c
     "final": integer, // final line of the edit (0-indexed, exclusive)
     "content": string[], // content of the edit to replace the lines from start to final
   }
+  "importance": number, // a number between 0 and 1 indicating how important this suggestion is. 0 means the suggestion is just a matter of taste with no measurable improvement, 1 means it's a critical improvement that should be made.
 }
-
-use the parameter ]] ..
-      tostring(config.options.eagerness) ..
-      [[ to determine how likely you are to make a suggestion. 0 means never suggest anything, 1 means always suggest something. if the value is close to 0, only make a suggestion if there's a very obvious language feature that can be used that the user isn't using. if the value is close to 1, make a suggestion for any non-trivial change.
 
 make suggestion only if there's an obvious language feature that can be used that the user isn't using.
 make the suggestion only about the changed lines.
@@ -130,7 +128,7 @@ end
 function AI.explain(code, callback)
   local prompt = [[
   explain this code in a concise way. focus on explaining any language features being used that are particular to this language: ]] ..
-  code
+      code
 
   make_ai_request(prompt, function(suggestion)
     if type(suggestion) == "string" then

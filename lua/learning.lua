@@ -83,7 +83,7 @@ function Learning.setup(opts)
 
         vim.schedule(function()
           ai.suggestion(diff, function(suggestion)
-            if suggestion then
+            if suggestion and 1 - suggestion.importance >= config.options.eagerness then
               Learning.show(vim.api.nvim_get_current_buf(), suggestion)
             end
           end)
