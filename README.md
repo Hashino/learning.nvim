@@ -2,12 +2,11 @@
   <a href="https://www.buymeacoffee.com/Hashino" target="_blank">
     <img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" 
     alt="Buy Me A Coffee" style="height: 24px !important;width: 104px !important;" >
-  </a>
 </div>
 
 # learning.nvim
 
-learn the language features naturally as you code
+larn the language features naturally as you code
 
 ![demo1](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo1.gif)
 
