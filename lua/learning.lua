@@ -44,18 +44,19 @@ local function should_suggest()
     return vim.b.learning_should_suggest
   end
 
+  -- only suggest on normal buffers
+  if vim.bo.buftype == "popup" or vim.bo.buftype == "prompt" or vim.fn.win_gettype() ~= "" then
+    vim.b.learning_should_suggest = false
+    return false
+  end
+
   ---@diagnostic disable-next-line: param-type-mismatch
   for _, exclude in ipairs(config.options.ignored_buffers) do
-    local ignored
-    if type(exclude) == "function" then
-      ignored = exclude()
-    else
-      ignored = vim.bo.filetype:find(exclude)  -- match filetype
-          or exclude == vim.fn.expand("%")     -- match filename
-          or exclude == vim.fn.expand("%:p")   -- match filepath
-    end
-
-    if ignored then
+    if
+        vim.bo.filetype:find(exclude)      -- match filetype
+        or exclude == vim.fn.expand("%")   -- match filename
+        or exclude == vim.fn.expand("%:p") -- match filepath
+    then
       vim.b.learning_should_suggest = false
       return false
     end

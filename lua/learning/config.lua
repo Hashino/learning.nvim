@@ -3,12 +3,10 @@ local Config = {}
 local HEIGHT = 25
 local WIDTH = 75
 
----@alias learning.IgnoreEntry string|fun():boolean string entries match filetype/filename/filepath; function entries return true to ignore the buffer
-
 ---@class learning.Config
 ---@field eagerness? number how eager the plugin is to suggest (0 to 1)
 ---@field debounce_ms? number debounce interval in ms before sending accumulated edits (default 250)
----@field ignored_buffers? learning.IgnoreEntry[]|fun():learning.IgnoreEntry[] buffers to skip suggestions on
+---@field ignored_buffers? string[]|fun():string[] elements are checked against buffer filetype/filename/filepath
 ---@field provider learning.Config.Provider provider options for the ai
 ---@field keys? learning.Config.Keys keymaps for the suggestion window
 ---@field win_config? table window config for the suggestion window (see :h nvim_open_win())
@@ -16,20 +14,12 @@ Config.options = {
   eagerness = 0.25,
   debounce_ms = 250,
 
-  -- doesn't suggest on buffers matched by these entries. each entry is
-  -- either a string (matched against filetype/filename/filepath, where
-  -- filepath can be relative or absolute) or a function returning true
-  -- when the buffer should be ignored. the whole option can also be a
-  -- function that returns such a list.
+  -- doesn't suggest on buffers that match filetype/filename/filepath to
+  -- entries. can be either a string array or a function that returns a
+  -- string array. filepath can be relative or absolute
   ignored_buffers = {
     ".gitignore",
     ".git/COMMIT_EDITMSG",
-    -- ignore anything that isn't a normal editable buffer
-    function()
-      return vim.bo.buftype ~= ""
-          or not vim.bo.modifiable
-          or vim.fn.win_gettype() ~= ""
-    end,
   },
 
   ---@class learning.Config.Provider

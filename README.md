@@ -28,7 +28,7 @@ lazy.nvim:
   opts = {
       eagerness = 0.25, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
       debounce_ms = 250, -- debounce interval in ms before sending accumulated edits
-      ignored_buffers = { ".gitignore", ".git/COMMIT_EDITMSG" }, -- buffers to skip. entries are strings (matched against filetype/filename/filepath) or functions returning true to ignore
+      ignored_buffers = { ".gitignore", ".git/COMMIT_EDITMSG" }, -- buffers to skip. string array or fun():string[], matched against filetype/filename/filepath
 
       provider = {
         api_key = "", -- your API key. be careful putting it in your dotfiles
@@ -82,21 +82,10 @@ require("learning").setup({
   -- debounce interval in ms before sending accumulated edits
   debounce_ms = 250,
 
-  -- doesn't suggest on buffers matched by these entries. each entry is
-  -- either a string (matched against filetype/filename/filepath, where
-  -- filepath can be relative to cwd or absolute) or a function returning
-  -- true when the buffer should be ignored. the whole option can also be
-  -- a function that returns such a list.
-  ignored_buffers = {
-    ".gitignore",
-    ".git/COMMIT_EDITMSG",
-    -- ignore anything that isn't a normal editable buffer
-    function()
-      return vim.bo.buftype ~= ""
-          or not vim.bo.modifiable
-          or vim.fn.win_gettype() ~= ""
-    end,
-  },
+  -- doesn't suggest on buffers that match filetype/filename/filepath to
+  -- entries. can be either a string array or a function that returns a
+  -- string array. filepath can be relative to cwd or absolute
+  ignored_buffers = { ".gitignore", ".git/COMMIT_EDITMSG" },
 
   provider = {
     api_key = "", -- your API key. be careful putting it in your dotfiles
