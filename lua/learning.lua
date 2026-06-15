@@ -35,6 +35,15 @@ local function compute_diff(old, new)
   }
 end
 
+-- buftypes that never make sense to suggest on
+local ignored_buftypes = {
+  popup = true,
+  prompt = true,
+  terminal = true,
+  help = true,
+  nofile = true,
+}
+
 --- checks whether the current buffer should receive suggestions
 ---@return boolean
 local function should_suggest()
@@ -45,7 +54,7 @@ local function should_suggest()
   end
 
   -- only suggest on normal buffers
-  if vim.bo.buftype == "popup" or vim.bo.buftype == "prompt" or vim.fn.win_gettype() ~= "" then
+  if ignored_buftypes[vim.bo.buftype] or vim.fn.win_gettype() ~= "" then
     vim.b.learning_should_suggest = false
     return false
   end
