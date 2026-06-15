@@ -92,20 +92,43 @@ function AI.suggestion(diff, filetype, callback)
   local old_content = table.concat(diff.old_content, "\n")
   local new_content = table.concat(diff.new_content, "\n")
 
-  local prompt = [[Given this change in ]] .. filetype .. [[:
+  local prompt_parts = {}
 
---- old
-]] .. old_content .. [[
+  table.insert(prompt_parts,
+    "You are a language-learning assistant for " .. filetype .. ".\n" ..
+    "The user just made an edit. Teach a single language feature that is " ..
+    "relevant *exclusively* to what changed in this edit.\n")
 
---- new
-]] .. new_content .. [[
+  table.insert(prompt_parts, "\n--- Region before the edit (context) ---\n```" .. filetype .. "\n")
+  table.insert(prompt_parts, old_content)
+  table.insert(prompt_parts, "\n```\n")
 
-If there's a more idiomatic way in ]] .. filetype .. [[, return JSON:
-{"summary": "markdown tip with code snippet", "edit": {"start": ]] ..
-  tostring(diff.start) .. [[, "final": integer, "content": [...]}, "importance": 0.0-1.0}
+  table.insert(prompt_parts, "\n--- Region after the edit (context) ---\n```" .. filetype .. "\n")
+  table.insert(prompt_parts, new_content)
+  table.insert(prompt_parts, "\n```\n")
 
-Only suggest if an obvious language feature is being missed. Be concise. Otherwise return nothing.
-]]
+  table.insert(prompt_parts, [[
+The two blocks above are the same region of the file before and after the edit.
+The surrounding lines are given only so you can understand the change; they are
+NOT the subject of your suggestion.
+
+Rules:
+- Base your suggestion ONLY on the lines that actually differ between "before"
+  and "after".
+- Do NOT mention, refactor, or react to any code that did not change in this
+  edit, even if you think it could be improved.
+- If the changed lines don't clearly miss an idiomatic ]] .. filetype .. [[ feature,
+  return nothing at all.
+
+Respond in JSON with no extra commentary:
+{"summary": "concise markdown tip about the edited lines, with a short code snippet", "edit": {"start": ]] ..
+    tostring(diff.start) .. [[, "final": integer, "content": [...]}, "importance": 0.0-1.0}
+
+The "edit" field replaces buffer lines from "start" to "final" (0-indexed,
+"final" exclusive) with "content"; omit it if you have no concrete replacement.
+Be concise.]])
+
+  local prompt = table.concat(prompt_parts, "\n")
 
   make_ai_request(prompt, callback)
 end
