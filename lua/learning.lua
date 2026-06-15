@@ -35,8 +35,40 @@ local function compute_diff(old, new)
   }
 end
 
+--- checks whether the current buffer should receive suggestions
+---@return boolean
+local function should_suggest()
+  -- once a buffer gets checked once, a variable is set to avoid
+  -- redoing the checking on every update
+  if vim.b.learning_should_suggest ~= nil then
+    return vim.b.learning_should_suggest
+  end
+
+  -- only suggest on normal buffers
+  if vim.bo.buftype ~= "" or vim.fn.win_gettype() ~= "" then
+    vim.b.learning_should_suggest = false
+    return false
+  end
+
+  ---@diagnostic disable-next-line: param-type-mismatch
+  for _, exclude in ipairs(config.options.ignored_buffers) do
+    if
+        vim.bo.filetype:find(exclude)      -- match filetype
+        or exclude == vim.fn.expand("%")   -- match filename
+        or exclude == vim.fn.expand("%:p") -- match filepath
+    then
+      vim.b.learning_should_suggest = false
+      return false
+    end
+  end
+
+  vim.b.learning_should_suggest = true
+  return true
+end
+
 local function send_suggestion()
   if not Learning.enabled then return end
+  if not should_suggest() then return end
 
   local buf = vim.api.nvim_get_current_buf()
   if not (vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)) then
@@ -84,6 +116,10 @@ end
 ---@param opts? learning.Config
 function Learning.setup(opts)
   config.options = vim.tbl_deep_extend("force", config.options, opts or {})
+
+  if type(config.options.ignored_buffers) == "function" then
+    config.options.ignored_buffers = config.options.ignored_buffers()
+  end
 
   if config.options.provider.api_url == ""
       or config.options.provider.model == ""

@@ -28,6 +28,7 @@ lazy.nvim:
   opts = {
       eagerness = 0.25, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
       debounce_ms = 250, -- debounce interval in ms before sending accumulated edits
+      ignored_buffers = {}, -- buffers to skip. string array or fun():string[], matched against filetype/filename/filepath
 
       provider = {
         api_key = "", -- your API key. be careful putting it in your dotfiles
@@ -44,6 +45,7 @@ vim.pack.add({ "https://github.com/Hashino/learning.nvim", })
 require("learning").setup({
   eagerness = 0.25, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
   debounce_ms = 250, -- debounce interval in ms before sending accumulated edits
+  ignored_buffers = {}, -- buffers to skip. string array or fun():string[], matched against filetype/filename/filepath
 
   provider = {
     api_key = "", -- your API key. be careful putting it in your dotfiles
@@ -65,4 +67,47 @@ After each edit, the plugin snapshots the buffer and computes a diff to detect w
 
 ## config
 
+### default options
+
 [see the source code for default options](https://github.com/Hashino/learning.nvim/blob/main/lua/learning/config.lua)
+
+### example config
+
+```lua
+require("learning").setup({
+  -- how eager the plugin is to show suggestions, between 0 and 1.
+  -- higher means more suggestions
+  eagerness = 0.25,
+
+  -- debounce interval in ms before sending accumulated edits
+  debounce_ms = 250,
+
+  -- doesn't suggest on buffers that match filetype/filename/filepath to
+  -- entries. can be either a string array or a function that returns a
+  -- string array. filepath can be relative to cwd or absolute
+  ignored_buffers = { "markdown", "NvimTree", ".env" },
+
+  provider = {
+    api_key = "", -- your API key. be careful putting it in your dotfiles
+    api_url = "", -- the URL for the API of your provider, example https://api.openai.com/v1/chat/completions
+    model = "",   -- the model you want to use, should be specified in the docs of your provider
+  },
+
+  -- keymaps for the suggestion window
+  keys = {
+    confirm = "<S-CR>", -- accept the suggested edit
+    dismiss = "<Esc>",  -- dismiss the suggestion
+  },
+
+  -- window config for the suggestion window
+  -- see :h nvim_open_win() for available options
+  win_config = {
+    border = "rounded",
+  },
+})
+
+local learning = require("learning")
+
+vim.keymap.set("v", "<leader>le", learning.explain, { desc = "Explain selected code", })
+vim.keymap.set("n", "<leader>lt", learning.toggle, { desc = "Toggle learning.nvim", })
+```
