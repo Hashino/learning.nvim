@@ -28,7 +28,7 @@ lazy.nvim:
   opts = {
       eagerness = 0.25, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
       debounce_ms = 250, -- debounce interval in ms before sending accumulated edits
-      ignored_buffers = { ".gitignore", "gitcommit" }, -- buffers to skip. entries are strings (matched against filetype/filename/filepath) or functions returning true to ignore
+      ignored_buffers = { ".gitignore", ".git/COMMIT_EDITMSG" }, -- buffers to skip. entries are strings (matched against filetype/filename/filepath) or functions returning true to ignore
 
       provider = {
         api_key = "", -- your API key. be careful putting it in your dotfiles
@@ -89,7 +89,7 @@ require("learning").setup({
   -- a function that returns such a list.
   ignored_buffers = {
     ".gitignore",
-    "gitcommit",
+    ".git/COMMIT_EDITMSG",
     -- ignore anything that isn't a normal editable buffer
     function()
       return vim.bo.buftype ~= ""

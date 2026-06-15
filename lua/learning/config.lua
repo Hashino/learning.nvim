@@ -6,8 +6,7 @@ local WIDTH = 75
 ---@class learning.Config
 ---@field eagerness? number how eager the plugin is to suggest (0 to 1)
 ---@field debounce_ms? number debounce interval in ms before sending accumulated edits (default 250)
----@alias learning.IgnoreEntry string|fun():boolean string entries match filetype/filename/filepath; function entries return true to ignore the buffer
----@field ignored_buffers? learning.IgnoreEntry[]|fun():learning.IgnoreEntry[] buffers to skip suggestions on
+---@alias learning.IgnoreEntry string|fun():boolean string entries match filetype/filename/filepath; function entries return true to ignore the buffer @field ignored_buffers? learning.IgnoreEntry[]|fun():learning.IgnoreEntry[] buffers to skip suggestions on
 ---@field provider learning.Config.Provider provider options for the ai
 ---@field keys? learning.Config.Keys keymaps for the suggestion window
 ---@field win_config? table window config for the suggestion window (see :h nvim_open_win())
@@ -22,7 +21,7 @@ Config.options = {
   -- function that returns such a list.
   ignored_buffers = {
     ".gitignore",
-    "gitcommit",
+    ".git/COMMIT_EDITMSG",
     -- ignore anything that isn't a normal editable buffer
     function()
       return vim.bo.buftype ~= ""
