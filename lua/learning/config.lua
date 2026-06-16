@@ -12,7 +12,7 @@ local WIDTH = 75
 ---@field win_config? table window config for the suggestion window (see :h nvim_open_win())
 Config.options = {
   eagerness = 0.25,
-  debounce_ms = 250,
+  debounce_ms = 1500,
 
   -- doesn't suggest on buffers that match filetype/filename/filepath to
   -- entries. can be either a string array or a function that returns a

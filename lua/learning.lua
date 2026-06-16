@@ -100,7 +100,7 @@ local function send_suggestion()
     if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
       vim.b[buf].learning_old = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     end
-    if suggestion and 1 - (suggestion.importance or 0) >= config.options.eagerness then
+    if suggestion and config.options.eagerness > 0 and (suggestion.importance or 0) >= 1 - config.options.eagerness then
       Learning.show(buf, suggestion)
     end
   end)
@@ -173,14 +173,17 @@ end
 ---@param toedit integer buffer to apply the edit to
 ---@param suggestion learning.Suggestion
 function Learning.show(toedit, suggestion)
-  if suggestion then
-    if Learning.win_id then
-      pcall(vim.api.nvim_win_close, Learning.win_id, true)
-      Learning.win_id = nil
-    end
+  if not suggestion or not suggestion.summary then
+    return
+  end
 
-    local buf = vim.api.nvim_create_buf(false, true)
-    local summary_lines = vim.split(suggestion.summary, "\n", { plain = true, })
+  if Learning.win_id then
+    pcall(vim.api.nvim_win_close, Learning.win_id, true)
+    Learning.win_id = nil
+  end
+
+  local buf = vim.api.nvim_create_buf(false, true)
+  local summary_lines = vim.split(suggestion.summary, "\n", { plain = true, })
 
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, summary_lines)
 
@@ -207,15 +210,14 @@ function Learning.show(toedit, suggestion)
       end, { buffer = buf, })
 
       vim.api.nvim_set_option_value("winbar",
-        string.format(" %s to accept | %s to dismiss",
+        string.format(" [Learning] %s to accept | %s to dismiss",
           config.options.keys.confirm, config.options.keys.dismiss),
         { win = Learning.win_id, })
     else
       vim.api.nvim_set_option_value("winbar",
-        string.format(" %s to dismiss", config.options.keys.dismiss),
+        string.format(" [Learning] %s to dismiss", config.options.keys.dismiss),
         { win = Learning.win_id, })
     end
-  end
 end
 
 function Learning.explain()
