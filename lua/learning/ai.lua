@@ -60,6 +60,12 @@ local function make_ai_request(prompt, callback)
         if type(content) ~= "string" then return end
 
         local cok, suggestion = pcall(vim.json.decode, content)
+        if not cok then
+          local stripped = content:match("^```[Jj][Ss][Oo][Nn]?\n(.-)\n```$")
+          if stripped then
+            cok, suggestion = pcall(vim.json.decode, stripped)
+          end
+        end
         if cok then
           callback(suggestion)
         elseif content then
