@@ -6,6 +6,10 @@
 
 # learning.nvim
 
+<a href="https://dotfyle.com/plugins/Hashino/learning.nvim">
+	<img src="https://dotfyle.com/plugins/Hashino/learning.nvim/shield?style=flat" />
+</a>
+
 larn the language features naturally as you code
 
 ![demo1](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo1.gif)
