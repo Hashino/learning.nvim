@@ -1,5 +1,6 @@
 local config   = require("learning.config")
 local ai       = require("learning.ai")
+local store    = require("learning.store")
 
 local Learning = {
   win_id = nil,
@@ -9,24 +10,70 @@ local Learning = {
   augroup = vim.api.nvim_create_augroup("Learning", { clear = true, }),
 }
 
-local function compute_diff(old, new)
-  local start_line = math.huge
-  local end_line = 0
+--- trims and drops blank lines, so two regions can be compared ignoring
+--- pure indentation / blank-line churn.
+---@param lines string[]
+---@return string[]
+local function meaningful(lines)
+  local out = {}
+  for _, l in ipairs(lines) do
+    local t = vim.trim(l)
+    if t ~= "" then table.insert(out, t) end
+  end
+  return out
+end
 
-  for i = 1, math.max(#old, #new) do
-    if old[i] ~= new[i] then
-      start_line = math.min(start_line, i)
-      end_line = math.max(end_line, i)
-    end
+--- true when a change isn't worth teaching about: a pure deletion, a
+--- whitespace/blank-line only change, or a re-indent (same text, new spacing).
+---@param old_changed string[] the old lines that actually changed
+---@param new_changed string[] the new lines that actually changed
+---@return boolean
+local function is_trivial(old_changed, new_changed)
+  local new_m = meaningful(new_changed)
+  -- nothing of substance was added (pure deletion / blank lines / whitespace)
+  if #new_m == 0 then return true end
+  -- identical once whitespace is ignored: only indentation/spacing changed
+  return vim.deep_equal(new_m, meaningful(old_changed))
+end
+
+--- computes the changed region between two buffer snapshots using real diff
+--- hunks (not a positional line-by-line compare, which falsely flags every
+--- line below an insertion/deletion as "changed").
+---@param old string[]
+---@param new string[]
+---@return learning.Diff|nil
+local function compute_diff(old, new)
+  local hunks = vim.diff(
+    table.concat(old, "\n"), table.concat(new, "\n"),
+    { result_type = "indices", }
+  )
+  ---@cast hunks integer[][]|nil
+  if not hunks or #hunks == 0 then return nil end
+
+  -- union of the changed line ranges, in old- and new-buffer coordinates
+  local new_min, new_max = math.huge, 0
+  local old_min, old_max = math.huge, 0
+  local old_changed, new_changed = {}, {}
+
+  for _, h in ipairs(hunks) do
+    local sa, ca, sb, cb = h[1], h[2], h[3], h[4]
+    -- count == 0 marks an insertion/deletion point; anchor on the hunk start
+    old_min = math.min(old_min, sa)
+    old_max = math.max(old_max, ca > 0 and sa + ca - 1 or sa)
+    new_min = math.min(new_min, sb)
+    new_max = math.max(new_max, cb > 0 and sb + cb - 1 or sb)
+
+    if ca > 0 then vim.list_extend(old_changed, vim.list_slice(old, sa, sa + ca - 1)) end
+    if cb > 0 then vim.list_extend(new_changed, vim.list_slice(new, sb, sb + cb - 1)) end
   end
 
-  if start_line == math.huge then return nil end
+  if is_trivial(old_changed, new_changed) then return nil end
 
   local context = 10
-  local from = math.max(1, start_line - context)
-  local to = math.min(#new, end_line + context)
-  local old_from = math.max(1, start_line - context)
-  local old_to = math.min(#old, end_line + context)
+  local from = math.max(1, new_min - context)
+  local to = math.min(#new, new_max + context)
+  local old_from = math.max(1, old_min - context)
+  local old_to = math.min(#old, old_max + context)
 
   return {
     start = from - 1,
@@ -84,6 +131,10 @@ local function send_suggestion()
     return
   end
 
+  -- avoid stacking overlapping requests (and the duplicate popups they cause)
+  -- while one is already in flight for this buffer.
+  if vim.b.learning_pending then return end
+
   vim.b.learning_new = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
 
   if vim.b.learning_old == nil then
@@ -95,12 +146,19 @@ local function send_suggestion()
   if not diff then return end
 
   local filetype = vim.bo[buf].filetype
+  local suppressed = store.suppressed_features(filetype)
 
-  ai.suggestion(diff, filetype, function(suggestion)
+  vim.b.learning_pending = true
+  ai.suggestion(diff, filetype, suppressed, function(suggestion)
     if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
+      vim.b[buf].learning_pending = false
       vim.b[buf].learning_old = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     end
-    if suggestion and config.options.eagerness > 0 and (suggestion.importance or 0) >= 1 - config.options.eagerness then
+    if not suggestion then return end
+    -- enforce suppression client-side even if the model ignored the hint
+    if store.is_suppressed(suggestion.language or filetype, suggestion.feature) then return end
+    if config.options.eagerness > 0 and (suggestion.importance or 0) >= 1 - config.options.eagerness then
+      suggestion.track_dismiss = true
       Learning.show(buf, suggestion)
     end
   end)
@@ -150,16 +208,7 @@ function Learning.setup(opts)
     end,
   })
 
-  vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP", "TextChanged" }, {
-    group = Learning.augroup,
-    callback = function()
-      if Learning.enabled then
-        debounce()
-      end
-    end,
-  })
-
-  vim.api.nvim_create_autocmd("InsertLeave", {
+  vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP", "TextChanged", "InsertLeave", }, {
     group = Learning.augroup,
     callback = function()
       if Learning.enabled then
@@ -185,44 +234,57 @@ function Learning.show(toedit, suggestion)
   local buf = vim.api.nvim_create_buf(false, true)
   local summary_lines = vim.split(suggestion.summary, "\n", { plain = true, })
 
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, summary_lines)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, summary_lines)
 
-    -- TODO: use treesitter highlighting once the markdown codeblock crash is fixed
-    -- https://github.com/nvim-treesitter/nvim-treesitter/issues/...
-    vim.api.nvim_set_option_value("syntax", "markdown", { buf = buf, })
+  -- TODO: use treesitter highlighting once the markdown codeblock crash is fixed
+  -- https://github.com/nvim-treesitter/nvim-treesitter/issues/...
+  vim.api.nvim_set_option_value("syntax", "markdown", { buf = buf, })
 
-    vim.keymap.set("n", config.options.keys.dismiss, function()
+  vim.keymap.set("n", config.options.keys.dismiss, function()
+    -- only explicit dismissals of auto-suggestions count toward suppression;
+    -- accepting an edit or replacing the window does not.
+    if suggestion.track_dismiss then
+      store.record_dismiss(suggestion.language, suggestion.feature)
+    end
+    pcall(vim.api.nvim_win_close, Learning.win_id, true)
+    Learning.win_id = nil
+  end, { buffer = buf, })
+
+  Learning.win_id = vim.api.nvim_open_win(buf, true, config.options.win_config)
+
+  -- only offer "accept" when the model returned a well-formed replacement
+  local edit = suggestion.edit
+  local has_edit = type(edit) == "table"
+      and type(edit.start) == "number"
+      and type(edit.final) == "number"
+      and type(edit.content) == "table"
+
+  if has_edit then
+    vim.keymap.set("n", config.options.keys.confirm, function()
+      -- guard against out-of-range indices from a malformed model edit
+      local ok = pcall(vim.api.nvim_buf_set_lines, toedit, edit.start, edit.final, false, edit.content)
+      if ok and vim.api.nvim_buf_is_valid(toedit) and vim.api.nvim_buf_is_loaded(toedit) then
+        vim.b[toedit].learning_old = vim.api.nvim_buf_get_lines(toedit, 0, -1, false)
+      end
       pcall(vim.api.nvim_win_close, Learning.win_id, true)
       Learning.win_id = nil
     end, { buffer = buf, })
 
-    Learning.win_id = vim.api.nvim_open_win(buf, true, config.options.win_config)
-
-    if suggestion.edit then
-      vim.keymap.set("n", config.options.keys.confirm, function()
-        vim.api.nvim_buf_set_lines(toedit, suggestion.edit.start, suggestion.edit.final, false,
-          suggestion.edit.content)
-        if vim.api.nvim_buf_is_valid(toedit) and vim.api.nvim_buf_is_loaded(toedit) then
-          vim.b[toedit].learning_old = vim.api.nvim_buf_get_lines(toedit, 0, -1, false)
-        end
-        pcall(vim.api.nvim_win_close, Learning.win_id, true)
-        Learning.win_id = nil
-      end, { buffer = buf, })
-
-      vim.api.nvim_set_option_value("winbar",
-        string.format(" [Learning] %s to accept | %s to dismiss",
-          config.options.keys.confirm, config.options.keys.dismiss),
-        { win = Learning.win_id, })
-    else
-      vim.api.nvim_set_option_value("winbar",
-        string.format(" [Learning] %s to dismiss", config.options.keys.dismiss),
-        { win = Learning.win_id, })
-    end
+    vim.api.nvim_set_option_value("winbar",
+      string.format(" [Learning] %s to accept | %s to dismiss",
+        config.options.keys.confirm, config.options.keys.dismiss),
+      { win = Learning.win_id, })
+  else
+    vim.api.nvim_set_option_value("winbar",
+      string.format(" [Learning] %s to dismiss", config.options.keys.dismiss),
+      { win = Learning.win_id, })
+  end
 end
 
 function Learning.explain()
+  -- visualmode() returns "" (not nil) when no visual mode has been used yet
   local mode = vim.fn.visualmode()
-  if mode == nil then
+  if mode == "" then
     vim.notify("[learning.nvim] No previous visual selection", vim.log.levels.WARN)
     return
   end
@@ -264,10 +326,11 @@ function Learning.explain()
   end
 
   local selection = table.concat(lines, "\n")
+  local filetype = vim.bo[buf].filetype
 
-  ai.explain(selection, function(explanation)
-    if explanation then
-      Learning.show(buf, { summary = explanation })
+  ai.explain(selection, filetype, function(suggestion)
+    if suggestion then
+      Learning.show(buf, suggestion)
     end
   end)
 end

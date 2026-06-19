@@ -23,6 +23,15 @@ larn the language features naturally as you code
 - `:Learning enable` enables the plugin
 - `:Learning toggle` toggles the plugin on and off
 
+## suppressing repeated suggestions
+
+Auto-suggestions teach a single language *feature* at a time. When you dismiss a
+suggestion about the same feature (for the same language) `dismiss_threshold`
+times (default `2`), future suggestions about that feature stop showing up.
+
+Dismissals are stored in `~/.local/share/nvim/learning.nvim/dismissed.json`.
+Delete that file to start over.
+
 ## installation
 
 lazy.nvim:
@@ -32,6 +41,7 @@ lazy.nvim:
   opts = {
       eagerness = 0.25, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
       debounce_ms = 250, -- debounce interval in ms before sending accumulated edits
+      dismiss_threshold = 2, -- dismissals of a feature before its suggestions are suppressed
       ignored_buffers = { ".gitignore", ".git/COMMIT_EDITMSG" }, -- buffers to skip. string array or fun():string[], matched against filetype/filename/filepath
 
       provider = {
@@ -86,6 +96,9 @@ require("learning").setup({
   -- debounce interval in ms before sending accumulated edits
   debounce_ms = 250,
 
+  -- dismissals of a feature (per language) before its suggestions are suppressed
+  dismiss_threshold = 2,
+
   -- doesn't suggest on buffers that match filetype/filename/filepath to
   -- entries. can be either a string array or a function that returns a
   -- string array. filepath can be relative to cwd or absolute
@@ -115,3 +128,18 @@ local learning = require("learning")
 vim.keymap.set("v", "<leader>le", learning.explain, { desc = "[E]xp[l]ain selected code", })
 vim.keymap.set("n", "<leader>lt", learning.toggle, { desc = "[T]oggle [l]earning.nvim", })
 ```
+
+## testing
+
+The `tests/` directory provides a manual test suite for your coding agent to run
+if you want to fork or contribute to the plugin. It drives a real Neovim session
+with [tui-use](https://github.com/onesuper/tui-use) and ships keyless configs that
+use a free provider, so no API key is needed.
+
+Only run it after a **big change to the main logic** (edit detection, prompts,
+tool calls, eagerness gating, or dismissal suppression), and run each step a few
+times since the backend is a live model. The eagerness levels each have their own
+config (`tests/init_eagerness_off.lua`, `_low.lua`, `_mid.lua`, `_high.lua`) so you
+can compare behaviour across them.
+
+See [`tests/tests.md`](tests/tests.md) for the plan and how to run it.
