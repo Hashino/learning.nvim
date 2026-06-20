@@ -131,15 +131,16 @@ vim.keymap.set("n", "<leader>lt", learning.toggle, { desc = "[T]oggle [l]earning
 
 ## testing
 
-The `tests/` directory provides a manual test suite for your coding agent to run
-if you want to fork or contribute to the plugin. It drives a real Neovim session
-with [tui-use](https://github.com/onesuper/tui-use) and ships keyless configs that
-use a free provider, so no API key is needed.
+The `tests/` directory has an automated suite for forking or contributing.
+`tests/run.lua` drives the real plugin end-to-end against a configured provider
+and ships a keyless config that uses a free provider, so no API key is needed:
+
+```sh
+XDG_DATA_HOME=/tmp/learning-test nvim --headless \
+  -u tests/init.lua -c "luafile tests/run.lua"
+```
 
 Only run it after a **big change to the main logic** (edit detection, prompts,
-tool calls, eagerness gating, or dismissal suppression), and run each step a few
-times since the backend is a live model. The eagerness levels each have their own
-config (`tests/init_eagerness_off.lua`, `_low.lua`, `_mid.lua`, `_high.lua`) so you
-can compare behaviour across them.
-
-See [`tests/tests.md`](tests/tests.md) for the plan and how to run it.
+tool calls, eagerness gating, or dismissal suppression), and run it a few times
+since the backend is a live model. See [`tests/tests.md`](tests/tests.md) for what
+it covers and an optional interactive smoke.

@@ -116,8 +116,13 @@ local function build_request(prompt, tools, tool_name)
   return headers, vim.json.encode(payload), anthropic
 end
 
+-- how many times to re-POST when a response comes back empty or unparseable
+-- (a transient endpoint hiccup), before giving up and reporting failure
+local MAX_ATTEMPTS = 3
+
 --- POSTs the prompt and forces the model to answer through `tool_name`,
---- invoking `callback` with that tool's arguments (or nil on failure)
+--- invoking `callback` with that tool's arguments (or nil on failure).
+--- retries a few times on a transient empty/unparseable response.
 ---@param prompt string
 ---@param tools table[]
 ---@param tool_name string
@@ -133,45 +138,54 @@ local function make_ai_request(prompt, tools, tool_name, callback)
   table.insert(cmd, "-d")
   table.insert(cmd, body)
 
-  -- guarantee `callback` runs exactly once, even when curl produces no output
-  -- (e.g. network failure), so callers relying on it to clear state don't hang.
-  local done = false
-  local function finish(arg)
-    if done then return end
-    done = true
-    callback(arg)
+  local function attempt(n)
+    -- settle this attempt exactly once: with a usable result (-> callback), or
+    -- as a failure (-> retry while attempts remain, else callback(nil)). guards
+    -- against curl emitting both on_stdout and on_exit, or no output at all.
+    local done = false
+    local function settle(arg, usable)
+      if done then return end
+      done = true
+      if usable then
+        callback(arg)
+      elseif n < MAX_ATTEMPTS then
+        attempt(n + 1)
+      else
+        callback(nil)
+      end
+    end
+
+    vim.fn.jobstart(cmd, {
+      stdout_buffered = true,
+      on_stdout = function(_, data, _)
+        if not data then return end
+
+        vim.schedule(function()
+          local ok, decoded = pcall(vim.json.decode, table.concat(data, ""))
+          if not ok or type(decoded) ~= "table" then
+            return settle(nil, false) -- unparseable -> retry
+          end
+
+          for _, tc in ipairs(extract_tool_calls(decoded, anthropic)) do
+            if tc.name == tool_name then
+              return settle(tc.arguments, true)
+            end
+          end
+
+          -- content-only fallback: the model replied with text instead of a tool
+          -- call. surface it so the user still gets something useful.
+          local content = extract_content(decoded, anthropic)
+          settle(content and { explanation = content, } or nil, content ~= nil)
+        end)
+      end,
+      on_exit = function()
+        -- no parseable stdout (e.g. network failure) -> retry / give up
+        vim.schedule(function() settle(nil, false) end)
+      end,
+    })
   end
 
-  vim.fn.jobstart(cmd, {
-    stdout_buffered = true,
-    on_stdout = function(_, data, _)
-      if not data then return end
-
-      vim.schedule(function()
-        local ok, decoded = pcall(vim.json.decode, table.concat(data, ""))
-        if not ok or type(decoded) ~= "table" then
-          finish(nil)
-          return
-        end
-
-        for _, tc in ipairs(extract_tool_calls(decoded, anthropic)) do
-          if tc.name == tool_name then
-            finish(tc.arguments)
-            return
-          end
-        end
-
-        -- content-only fallback: the model replied with text instead of a tool
-        -- call. surface it so the user still gets something useful.
-        local content = extract_content(decoded, anthropic)
-        finish(content and { explanation = content, } or nil)
-      end)
-    end,
-    on_exit = function()
-      -- if stdout produced nothing parseable, ensure the callback still fires
-      vim.schedule(function() finish(nil) end)
-    end,
-  })
+  attempt(1)
 end
 
 ---@class learning.Suggestion
@@ -253,8 +267,12 @@ omit it if you have no concrete replacement. Edits start at line ]] ..
         },
         importance = {
           type = "integer",
-          description = "Integer from 0 to 10 for how important it is to show this. Use 0 when " ..
-            "there is nothing worth teaching about the edited lines, 10 for an essential idiom.",
+          description = "How important it is to show this, as an integer 0-10. Rubric: " ..
+            "0 = nothing worth teaching about the edited lines; 1-4 = minor or stylistic; " ..
+            "5-7 = a genuinely useful idiom; 8-10 = a core idiom every learner of this " ..
+            "language should know (e.g. replacing a manual loop with a built-in, " ..
+            "comprehensions, context managers). Be decisive — reserve 8-10 for clearly " ..
+            "idiomatic improvements and 0 when there is nothing to teach.",
         },
         edit = {
           type = "object",
