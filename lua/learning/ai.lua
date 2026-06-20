@@ -187,11 +187,6 @@ end
 ---@field final integer final line of the edit (0-indexed, exclusive)
 ---@field content string[] the content of the edit
 
----@class learning.Diff
----@field start integer start line of the change (0-indexed)
----@field old_content string[] content of the old lines
----@field new_content string[] content of the new lines
-
 --- asks the model to teach a single language feature about an edit.
 ---@param diff learning.Diff
 ---@param filetype string filetype of the buffer being edited

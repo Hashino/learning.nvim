@@ -79,7 +79,7 @@ terminal.)
 
 ## Edit-detection invariants (no false triggers)
 
-These are the regression checks for the `vim.diff`-based detection. After each
+These are the regression checks for the `vim.text.diff`-based detection. After each
 trivial edit, **no suggestion window may open** within ~3s.
 
 - **T1 — re-indent only.** Visually select the body of `greet` and shift it right
