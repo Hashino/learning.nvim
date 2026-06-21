@@ -69,6 +69,26 @@ require("learning").setup({
 })
 ```
 
+## providers
+
+learning.nvim works with any OpenAI-compatible (or Anthropic) provider — set
+`provider.api_url`, `provider.model`, and `provider.api_key`.
+
+For a capable **free** option, [OpenRouter](https://openrouter.ai)'s
+`openai/gpt-oss-120b:free` is one of the best free coding models and works well
+here:
+
+```lua
+provider = {
+  api_url = "https://openrouter.ai/api/v1/chat/completions",
+  api_key = "sk-or-...", -- your OpenRouter key
+  model = "openai/gpt-oss-120b:free",
+}
+```
+
+> Some free "thinking" models reject a _forced_ tool call; learning.nvim falls
+> back to `tool_choice="auto"` automatically, so those models work too.
+
 ## keymap example
 
 ```lua
