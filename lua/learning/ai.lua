@@ -1,4 +1,5 @@
 local config = require("learning.config")
+local utils  = require("learning.utils")
 
 local AI = {}
 
@@ -47,17 +48,6 @@ local function extract_tool_calls(decoded, anthropic)
     end
   end
   return calls
-end
-
---- maps the model's importance score onto the 0..1 range the eagerness gate
---- expects. Models reliably use the 0..10 integer scale we ask for, but some
---- still answer on a 0..1 scale, so values <= 1 are treated as already-normalized.
----@param raw any
----@return number
-local function normalize_importance(raw)
-  local n = tonumber(raw) or 0
-  if n > 1 then n = n / 10 end
-  return math.max(0, math.min(1, n))
 end
 
 --- builds a tool definition in the active provider's format
@@ -208,7 +198,7 @@ end
 ---@field feature? string short identifier of the language feature taught
 ---@field language? string language the feature belongs to (the buffer filetype)
 ---@field edit? learning.Edit edit to apply if the user accepts
----@field importance? number between 0 and 1 indicating how important this suggestion is.
+---@field level? string skill level of the taught feature ("none" or one of config.LEVELS)
 ---@field track_dismiss? boolean when true, dismissing the window records a dismissal for (language, feature)
 
 ---@class learning.Edit
@@ -240,7 +230,7 @@ function AI.suggestion(diff, filetype, suppressed, callback)
   if #suppressed > 0 then
     table.insert(prompt_parts,
       "\nThe user has already dismissed these features; do NOT teach them again " ..
-      "(use the `suggest` tool with importance 0 if the edit only relates to them): " ..
+      "(use the `suggest` tool with level \"none\" if the edit only relates to them): " ..
       table.concat(suppressed, ", ") .. "\n")
   end
 
@@ -255,7 +245,7 @@ Rules:
 - Do NOT mention, refactor, or react to any code that did not change in this
   edit, even if you think it could be improved.
 - If the changed lines don't clearly miss an idiomatic ]] .. filetype .. [[ feature,
-  call the `suggest` tool with importance 0.
+  call the `suggest` tool with level "none".
 
 Always answer by calling the `suggest` tool. The "edit" field replaces buffer
 lines from "start" to "final" (0-indexed, "final" exclusive) with "content";
@@ -280,14 +270,23 @@ omit it if you have no concrete replacement. Edits start at line ]] ..
           type = "string",
           description = "The language the feature belongs to. Use exactly: " .. filetype,
         },
-        importance = {
-          type = "integer",
-          description = "How important it is to show this, as an integer 0-10. Rubric: " ..
-            "0 = nothing worth teaching about the edited lines; 1-4 = minor or stylistic; " ..
-            "5-7 = a genuinely useful idiom; 8-10 = a core idiom every learner of this " ..
-            "language should know (e.g. replacing a manual loop with a built-in, " ..
-            "comprehensions, context managers). Be decisive — reserve 8-10 for clearly " ..
-            "idiomatic improvements and 0 when there is nothing to teach.",
+        level = {
+          type = "string",
+          enum = { "none", "beginner", "intermediate", "advanced", "master", },
+          description = "Skill level of the missed feature, judged by how OBVIOUS the miss " ..
+            "is — NOT how clever the fix is. " ..
+            "\"none\" = the edited lines are already idiomatic, nothing to teach. " ..
+            "\"beginner\" = a clear beginner-level miss of a core builtin (manual accumulation " ..
+            "loop → sum, range(len(...)) indexing → enumerate, building strings with + → join, " ..
+            "append-loop → comprehension). " ..
+            "\"intermediate\" = a useful everyday idiom a beginner could easily miss " ..
+            "(enumerate/zip, dict.get, context managers, f-strings). " ..
+            "\"advanced\" = a non-obvious refinement that already-working code only marginally " ..
+            "benefits from (dropping brackets in `sum([...])`, `for k in d` vs `d.keys()`, " ..
+            "`not x` vs `len(x) == 0`, comprehension vs map/filter). " ..
+            "\"master\" = an expert-level construct most code never needs (generators over " ..
+            "lists for memory, __slots__, functools tricks). " ..
+            "Prefer \"none\" or \"advanced\" for already-working code; reserve \"beginner\" for obvious misses.",
         },
         edit = {
           type = "object",
@@ -300,7 +299,7 @@ omit it if you have no concrete replacement. Edits start at line ]] ..
           required = { "start", "final", "content", },
         },
       },
-      { "explanation", "feature", "language", "importance", }),
+      { "explanation", "feature", "language", "level", }),
   }
 
   make_ai_request(table.concat(prompt_parts, "\n"), tools, "suggest", function(args)
@@ -312,7 +311,7 @@ omit it if you have no concrete replacement. Edits start at line ]] ..
       summary = args.explanation,
       feature = args.feature,
       language = args.language,
-      importance = normalize_importance(args.importance),
+      level = utils.normalize_level(args.level),
       edit = args.edit,
     })
   end)
@@ -362,12 +361,11 @@ function AI.explain(code, filetype, callback)
   end)
 end
 
--- exposed for tests/run.lua to exercise response parsing and importance
--- normalization deterministically, without a live provider.
+-- exposed for tests/run.lua to exercise response parsing deterministically,
+-- without a live provider.
 AI._test = {
   extract_tool_calls = extract_tool_calls,
   extract_content = extract_content,
-  normalize_importance = normalize_importance,
 }
 
 return AI

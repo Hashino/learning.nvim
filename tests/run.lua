@@ -8,8 +8,8 @@
 --   XDG_DATA_HOME=/tmp/learning-test nvim --headless \
 --     -u tests/init.lua             -c "luafile tests/run.lua"    -- keyless Zen
 --
--- Model-dependent checks (suggestion/explain relevance, eagerness) need a
--- provider that supports tool calling; the deterministic checks do not.
+-- Model-dependent checks (suggestion/explain relevance, level classification)
+-- need a provider that supports tool calling; the deterministic checks do not.
 
 local config   = require("learning.config")
 local diff     = require("learning.diff")
@@ -33,13 +33,6 @@ local function check(name, ok, detail)
   end
 end
 
---- runs an async `fn(cb)` and blocks until it calls back, returning the result
-local function await(fn, timeout)
-  local done, result = false, nil
-  fn(function(r) result, done = r, true end)
-  vim.wait(timeout or 60000, function() return done end, 100)
-  return result
-end
 
 -- deterministic checks — no model required
 
@@ -126,26 +119,24 @@ do
     store.is_suppressed("python", "e2e-explain") == false)
 end
 
-local function approx(a, b) return type(a) == "number" and math.abs(a - b) < 1e-9 end
-
 -- response parsing (ai._test): both provider shapes, fallbacks, malformed input.
 -- this is what a single live provider can never exercise — the OTHER shape.
 do
   local t = ai._test
   local openai = { choices = { { message = { tool_calls = {
-    { type = "function", ["function"] = { name = "suggest", arguments = '{"explanation":"x","importance":8}' }, },
+    { type = "function", ["function"] = { name = "suggest", arguments = '{"explanation":"x","level":"beginner"}' }, },
   }, }, }, }, }
   local oc = t.extract_tool_calls(openai, false)
   check("parse: openai tool_calls extracted",
-    #oc == 1 and oc[1].name == "suggest" and oc[1].arguments.importance == 8)
+    #oc == 1 and oc[1].name == "suggest" and oc[1].arguments.level == "beginner")
 
   local anthropic = { content = {
     { type = "text", text = "preamble", },
-    { type = "tool_use", name = "suggest", input = { explanation = "y", importance = 9 }, },
+    { type = "tool_use", name = "suggest", input = { explanation = "y", level = "advanced" }, },
   }, }
   local ac = t.extract_tool_calls(anthropic, true)
   check("parse: anthropic tool_use extracted",
-    #ac == 1 and ac[1].name == "suggest" and ac[1].arguments.importance == 9)
+    #ac == 1 and ac[1].name == "suggest" and ac[1].arguments.level == "advanced")
 
   check("parse: openai content fallback",
     t.extract_content({ choices = { { message = { content = "hello" }, }, }, }, false) == "hello")
@@ -159,29 +150,45 @@ do
   check("parse: empty response yields no tool calls", #t.extract_tool_calls({}, false) == 0)
 end
 
--- importance normalization edge values (the 9 -> 0.9 bug class)
+-- skill level helpers (utils): ordering and model-output coercion
 do
-  local ni = ai._test.normalize_importance
-  check("normalize: 8 -> 0.8", approx(ni(8), 0.8))
-  check("normalize: 10 -> 1", approx(ni(10), 1))
-  check("normalize: already 0.9 stays", approx(ni(0.9), 0.9))
-  check("normalize: >10 clamps to 1", approx(ni(15), 1))
-  check("normalize: negative clamps to 0", approx(ni(-3), 0))
-  check("normalize: nil -> 0", approx(ni(nil), 0))
-  check("normalize: numeric string '7' -> 0.7", approx(ni("7"), 0.7))
+  check("level_index: ordered beginner < master",
+    utils.level_index("beginner") == 1 and utils.level_index("master") == #config.LEVELS)
+  check("level_index: unknown level -> nil", utils.level_index("wizard") == nil)
+  check("normalize_level: known level passes through", utils.normalize_level("Advanced") == "advanced")
+  check("normalize_level: explicit none preserved", utils.normalize_level("none") == "none")
+  check("normalize_level: unknown degrades to lowest (never silent)",
+    utils.normalize_level("wizard") == config.LEVELS[1] and utils.normalize_level(nil) == config.LEVELS[1])
 end
 
--- eagerness gate arithmetic at the boundaries (no model needed)
+-- skill-level gate + progression (store): the user starts at the lowest level,
+-- only sees features at/below it, and unlocks the next by engaging at the top
+-- level. XDG_DATA_HOME isolates progress.json.
 do
-  local function at(e, imp)
-    config.options.eagerness = e
-    return utils.meets_eagerness(imp)
-  end
-  check("gate: eagerness 0 never shows", at(0, 1) == false and at(0, 0.5) == false)
-  check("gate: eagerness 1 shows any importance", at(1, 0) == true)
-  check("gate: 0.25 shows iff importance >= 0.75", at(0.25, 0.75) == true and at(0.25, 0.74) == false)
-  check("gate: 0.75 shows iff importance >= 0.25", at(0.75, 0.25) == true and at(0.75, 0.24) == false)
-  check("gate: nil importance treated as 0", at(0.75, nil) == false)
+  config.options.unlock_threshold = 3
+  local lang = "progress-probe-lang"
+  check("progress: starts at the lowest level", store.unlocked_level(lang) == config.LEVELS[1])
+  check("gate: beginner unlocked from the start", store.is_unlocked(lang, "beginner") == true)
+  check("gate: a higher level is locked initially", store.is_unlocked(lang, "intermediate") == false)
+  check("gate: an unknown level is never unlocked", store.is_unlocked(lang, "wizard") == false)
+
+  -- engaging with a NOT-yet-top level doesn't advance you
+  store.record_interaction(lang, "intermediate")
+  check("progress: engaging above the top level doesn't advance", store.unlocked_level(lang) == config.LEVELS[1])
+
+  -- engage threshold-1 times at the top level: still not unlocked
+  store.record_interaction(lang, "beginner")
+  store.record_interaction(lang, "beginner")
+  check("progress: below threshold keeps current level", store.unlocked_level(lang) == config.LEVELS[1])
+  -- the threshold-th engagement unlocks the next level and resets the counter
+  store.record_interaction(lang, "beginner")
+  check("progress: reaching the threshold unlocks the next level",
+    store.unlocked_level(lang) == "intermediate")
+  check("gate: newly unlocked level now shows", store.is_unlocked(lang, "intermediate") == true)
+  check("gate: the level after that is still locked", store.is_unlocked(lang, "advanced") == false)
+
+  -- progress is per-language: an untouched language is still at the start
+  check("progress: independent per language", store.unlocked_level("other-lang") == config.LEVELS[1])
 end
 
 -- more diff edge cases
@@ -251,83 +258,153 @@ do
   require("learning.store") -- leave the module loaded again
 end
 
--- model-dependent checks — need a tool-calling provider.
--- fixtures are GENERATED FRESH each run (tests/fixtures.lua, via the keyless free
--- Zen models), so these assertions are invariants, never a fixed sentence.
-local fixtures = require("tests.fixtures")
+-- progression: persists across a reload, and caps at the top level
+do
+  config.options.unlock_threshold = 1
+  local lang = "persist-progress-lang"
+  store.record_interaction(lang, config.LEVELS[1]) -- threshold 1 -> unlock level 2
+  package.loaded["learning.store"] = nil
+  check("progress: level persists across a module reload",
+    require("learning.store").unlocked_level(lang) == config.LEVELS[2])
+  store = require("learning.store")
 
--- relevant if the prose names the idiom OR the proposed edit rewrites toward it
-local function mentions_any(s, terms)
-  local hay = ((s.summary or "") .. " " .. (s.feature or "")):lower()
-  if s.edit and type(s.edit.content) == "table" then
-    hay = hay .. " " .. table.concat(s.edit.content, " "):lower()
-  end
-  for _, t in ipairs(terms) do if hay:find(t:lower(), 1, true) then return true end end
-  return false
+  -- drive a fresh language all the way to the top level, then past it
+  local top = "cap-lang"
+  for _ = 1, #config.LEVELS do store.record_interaction(top, store.unlocked_level(top)) end
+  check("progress: never advances past the highest level",
+    store.unlocked_level(top) == config.LEVELS[#config.LEVELS])
+  -- engaging at the cap is a harmless no-op (no crash, stays at master)
+  store.record_interaction(top, config.LEVELS[#config.LEVELS])
+  check("progress: engaging at the cap is a no-op",
+    store.unlocked_level(top) == config.LEVELS[#config.LEVELS])
 end
 
--- auto-suggestion holds its invariants over two freshly generated edits
-for _ = 1, 2 do
-  local fx = fixtures.fresh()
-  local tag = "suggest[" .. fx.name .. (fx.generated and "" or "/FALLBACK") .. "]"
-  local change = diff.compute(fx.before, fx.after)
-  check(tag .. ": fixture is a non-trivial edit", change ~= nil)
-  if change then
-    local s = await(function(cb) ai.suggestion(change, fx.ft, {}, cb) end)
-    check(tag .. ": returns a suggestion", s ~= nil)
+-- model-dependent checks — need a tool-calling provider. every live request is
+-- independent, so they fire CONCURRENTLY (one curl each) and settle in a couple
+-- of waves rather than one slow call at a time. transient failures (the free
+-- keyless models occasionally drop a call) are retried in later waves, so a
+-- network hiccup isn't mistaken for a wrong answer.
+local fixtures = require("tests.fixtures")
+
+-- rank a skill level low→high; "none" (nothing to teach) sits above "master" as
+-- the highest possible bar, so a subtle case the model declines to teach still
+-- separates correctly from an obvious beginner miss.
+local LEVEL_RANK = { beginner = 1, intermediate = 2, advanced = 3, master = 4, none = 5, }
+
+-- dispatches every async job(cb) at once and returns their results keyed the same
+-- as `jobs`, retrying only the jobs that came back nil for up to `rounds` waves.
+local function gather(jobs, rounds)
+  local results, pending = {}, jobs
+  for _ = 1, rounds or 1 do
+    local got, remaining = {}, 0
+    for _ in pairs(pending) do remaining = remaining + 1 end
+    if remaining == 0 then break end
+    for k, job in pairs(pending) do
+      job(function(r) got[k] = r remaining = remaining - 1 end)
+    end
+    vim.wait(180000, function() return remaining == 0 end, 50)
+
+    local next_pending = {}
+    for k, job in pairs(pending) do
+      if got[k] ~= nil then results[k] = got[k] else next_pending[k] = job end
+    end
+    pending = next_pending
+    if next(pending) == nil then break end
+  end
+  return results
+end
+
+-- before = the function's signature stub, so the diff the model sees is its body
+local function suggest_job(before, after, ft)
+  local change = diff.compute(before, after)
+  return change, change and function(cb) ai.suggestion(change, ft or "python", {}, cb) end or nil
+end
+
+-- two FRESHLY GENERATED "beginner" edits (novel code each run, via the keyless
+-- free Zen models) drive shape invariants; "beginner" is the level the free
+-- generator produces reliably. generation uses a blocking call, so it stays
+-- sequential; the classification requests it feeds into the batch below do not.
+local generated = {}
+for i = 1, 2 do
+  local fx = fixtures.fresh("beginner")
+  local change, job = suggest_job(fx.before, fx.after, fx.ft)
+  generated[i] = {
+    tag = "suggest[" .. fx.name .. (fx.generated and "" or "/FALLBACK") .. "]",
+    change = change,
+    job = job,
+  }
+end
+
+-- one concurrent batch: the generated-fixture classifications, the curated
+-- per-level separation set, and the on-demand explain.
+local jobs = {}
+for i, fx in ipairs(generated) do
+  if fx.job then jobs["gen" .. i] = fx.job end
+end
+for _, lvl in ipairs(config.LEVELS) do
+  for i, body in ipairs(fixtures.CURATED[lvl]) do
+    local _, job = suggest_job({ body[1], "    pass", }, body)
+    if job then jobs[lvl .. i] = job end
+  end
+end
+jobs.explain = function(cb) ai.explain("squares = [x * x for x in range(10)]", "python", cb) end
+
+local R = gather(jobs, 4)
+
+-- shape invariants over the generated fixtures. assertions are invariants, never
+-- a fixed sentence.
+for i, fx in ipairs(generated) do
+  check(fx.tag .. ": fixture is a non-trivial edit", fx.change ~= nil)
+  if fx.change then
+    local s = R["gen" .. i]
+    check(fx.tag .. ": returns a suggestion", s ~= nil)
     if s then
-      check(tag .. ": importance in 0..1",
-        type(s.importance) == "number" and s.importance >= 0 and s.importance <= 1,
-        tostring(s.importance))
-      check(tag .. ": feature is a non-empty string",
+      check(fx.tag .. ": level is a known classification",
+        type(s.level) == "string" and LEVEL_RANK[s.level] ~= nil, tostring(s.level))
+      check(fx.tag .. ": feature is a non-empty string",
         type(s.feature) == "string" and #s.feature > 0, tostring(s.feature))
-      check(tag .. ": relevant to the idiom (" .. table.concat(fx.terms, "/") .. ")",
-        mentions_any(s, fx.terms), (s.feature or s.summary or ""):sub(1, 70))
-      check(tag .. ": any returned edit is well-formed",
+      check(fx.tag .. ": any returned edit is well-formed",
         s.edit == nil or utils.valid_edit(s.edit) ~= nil)
     end
   end
 end
 
--- eagerness gate: a FIXED strongly-idiomatic edit (sum). generated fixtures vary
--- in idiom strength, and the model's importance for a weaker idiom (e.g. str.join)
--- is noisy enough to straddle a near-bar eagerness; sum scores stably, isolating
--- the gate from fixture/importance variance. run 3x at 0.25 and 0.75 — the show/
--- hide decision must be CONSISTENT across the three runs.
-local gate_fx = {
-  ft = "python", name = "fixed:loop->sum",
-  before = { "def total(numbers):", "    result = 0", "    for n in numbers:", "        result = result + n", "    return result", },
-  after = { "def total(numbers):", "    return sum(numbers)", },
-}
-local gate_change = diff.compute(gate_fx.before, gate_fx.after)
-local function gate(imp)
-  return config.options.eagerness > 0 and (imp or 0) >= 1 - config.options.eagerness
-end
----@param change learning.Diff
----@param ft string
----@param level number
-local function eagerness_runs(change, ft, level)
-  config.options.eagerness = level
-  local decisions, imps = {}, {}
-  for i = 1, 3 do
-    local s = await(function(cb) ai.suggestion(change, ft, {}, cb) end)
-    imps[i] = s and s.importance or "nil"
-    decisions[i] = s ~= nil and gate(s.importance) or false
+-- level ordering: the curated fixtures should classify in roughly increasing
+-- order beginner < intermediate < advanced < master, so the progressive gate
+-- reveals features in pedagogical order. weak models are noisy in the middle, so
+-- assert the robust shape: the easy extreme lands lowest, the hard extreme
+-- highest, with a clear total spread (middles only have to fall in between).
+do
+  local function avg(t) local s = 0 for _, v in ipairs(t) do s = s + v end return #t > 0 and s / #t or 0 end
+  local function cluster(lvl)
+    local o = {}
+    for i = 1, #fixtures.CURATED[lvl] do
+      local s = R[lvl .. i]
+      if s and type(s.level) == "string" then table.insert(o, LEVEL_RANK[s.level]) end
+    end
+    return o
   end
-  return decisions[1] == decisions[2] and decisions[2] == decisions[3], decisions, imps
-end
-if gate_change then
-  local c25, d25, i25 = eagerness_runs(gate_change, gate_fx.ft, 0.25)
-  check("eagerness 0.25 [" .. gate_fx.name .. "]: same decision across 3 runs", c25,
-    "decisions=" .. vim.inspect(d25) .. " importance=" .. vim.inspect(i25))
-  local c75, d75, i75 = eagerness_runs(gate_change, gate_fx.ft, 0.75)
-  check("eagerness 0.75 [" .. gate_fx.name .. "]: same decision across 3 runs", c75,
-    "decisions=" .. vim.inspect(d75) .. " importance=" .. vim.inspect(i75))
+
+  local avgs, detail, all_scored = {}, {}, true
+  for _, lvl in ipairs(config.LEVELS) do
+    local r = cluster(lvl)
+    if #r == 0 then all_scored = false end
+    avgs[lvl] = avg(r)
+    table.insert(detail, ("%s=%.2f%s"):format(lvl, avgs[lvl], vim.inspect(r)))
+  end
+
+  print("INFO  level classification: " .. table.concat(detail, " "))
+  local lo, hi = config.LEVELS[1], config.LEVELS[#config.LEVELS]
+  local extremes_ordered = avgs[lo] <= avgs.intermediate and avgs[lo] <= avgs.advanced
+      and avgs[hi] >= avgs.intermediate and avgs[hi] >= avgs.advanced
+  check("levels: classifications trend from beginner (low) to master (high)",
+    all_scored and extremes_ordered and (avgs[hi] - avgs[lo]) >= 1.0,
+    table.concat(detail, " "))
 end
 
 -- explain answers about the *selected* code (distinctive construct -> named)
 do
-  local s = await(function(cb) ai.explain("squares = [x * x for x in range(10)]", "python", cb) end)
+  local s = R.explain
   check("explain: returns an explanation", s ~= nil and s.summary ~= nil)
   check("explain: relevant to selection (mentions comprehension)",
     s ~= nil and (s.summary or ""):lower():find("comprehension") ~= nil,

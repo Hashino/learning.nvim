@@ -1,13 +1,16 @@
--- Non-deterministic test fixtures: on each run the model *generates fresh code*
--- to be tested, rather than us templating it. Inspired by askai.nvim's "invent a
--- new prompt every run" plan — here the edit under test is invented by the model,
--- so the live suite never overfits a memorized snippet and is forced to hold its
+-- Non-deterministic test fixtures: on each run a random free model *writes the
+-- code under test*, rather than us templating it. Inspired by askai.nvim's
+-- "invent a new prompt every run" plan — here the snippet is invented by the
+-- model, so the live suite never overfits a memorized example and must hold its
 -- invariants over genuinely novel input each run.
 --
--- Each fixture is a short Python edit (`before` → `after`, the last line just
--- typed) whose `after` still misses one idiomatic builtin/feature the plugin
--- should teach. Assertions over these must be invariants (shape, importance
--- range, idiom relevance), never a hardcoded expected sentence.
+-- Two categories drive the skill-level checks:
+--   "obvious" — a function missing an obvious, well-known feature (should
+--               classify at a low/beginner skill level).
+--   "subtle"  — a function that merely could be slightly more idiomatic (should
+--               classify at a higher skill level, or "none").
+-- Assertions over these must be invariants (shape, a known level, and obvious
+-- classifying below subtle), never a hardcoded expected sentence.
 --
 -- Generation runs against the KEYLESS free OpenCode Zen models (no API key, no
 -- auth header) so the suite is runnable by anyone — decoupled from whatever
@@ -20,7 +23,7 @@ local diff = require("learning.diff")
 local Fixtures = {}
 
 -- keyless free Zen provider (from ~/.pi/agent/models.json: opencode-free).
--- rotate models for extra between-run variety; all need no Authorization header.
+-- a random model writes each fixture, for extra between-run variety.
 local FREE_URL = "https://opencode.ai/zen/v1/chat/completions"
 local FREE_MODELS = { "deepseek-v4-flash-free", "big-pickle", "nemotron-3-ultra-free", }
 
@@ -54,42 +57,34 @@ local function request(prompt, tool)
   return aok and args or nil
 end
 
--- ── AI-generated fixture ──────────────────────────────────────────────────
-local PROMPT = table.concat({
-  "You generate test fixtures for a Python-idioms tutor.",
-  "Invent a SHORT, realistic Python snippet (a few lines) that a learner might",
-  "write and that MISSES exactly one common idiomatic Python feature — e.g. a",
-  "manual accumulator loop instead of sum(), a manual index instead of enumerate,",
-  "string building with + instead of ''.join(), an append-loop instead of a list",
-  "comprehension, range(len(x)) indexing, a manual max/min, etc.",
-  "Vary the identifiers, values and structure so it is DIFFERENT every time —",
-  "avoid textbook names like 'numbers'/'result'.",
-  "",
-  "Return two versions via the make_fixture tool:",
-  "- after: the FULL snippet, including the multi-line block that misses the idiom",
-  "  (the entire manual loop / range(len()) indexing / string += / append-loop).",
-  "- before: the SAME snippet with that whole block removed — the state just before",
-  "  the user wrote it (e.g. only the function signature or the surrounding lines).",
-  "So the DIFF (lines in `after` but not `before`) IS the idiom-missing block itself:",
-  "at least 2-3 lines that clearly show the pattern, never a single trailing line.",
-  "Also give `idiom` (the missing feature) and `terms` (1-3 lowercase words the",
-  "correct idiom is described with, e.g. ['sum'], ['enumerate'], ['join']).",
-}, "\n")
+-- ── AI-generated fixtures ─────────────────────────────────────────────────
+local PROMPTS = {
+  beginner = table.concat({
+    "Generate a single short Python function (3-8 lines) that MISSES an obvious,",
+    "well-known Python feature — a clear idiomatic improvement a beginner would",
+    "miss (e.g. a manual loop that should use a builtin, range(len()) indexing,",
+    "string concatenation that should use join). Vary it every time.",
+  }, "\n"),
+  advanced = table.concat({
+    "Generate a single short Python function (3-8 lines) that WORKS FINE and is",
+    "already reasonable, but could be written in a SLIGHTLY more idiomatic way —",
+    "a minor, non-obvious refinement, nothing a beginner would obviously miss.",
+    "Vary it every time.",
+  }, "\n"),
+}
 
 local TOOL = {
   type = "function",
   ["function"] = {
     name = "make_fixture",
-    description = "Return a fresh Python edit that misses one idiomatic feature.",
+    description = "Return a single Python function as the code under test.",
     parameters = {
       type = "object",
       properties = {
-        before = { type = "array", items = { type = "string", }, description = "lines before the last edit", },
-        after = { type = "array", items = { type = "string", }, description = "lines after the last edit", },
-        idiom = { type = "string", description = "the missing idiomatic feature", },
-        terms = { type = "array", items = { type = "string", }, description = "1-3 lowercase idiom terms", },
+        code = { type = "array", items = { type = "string", }, description = "the function, one string per line", },
+        note = { type = "string", description = "a few words naming the feature/refinement", },
       },
-      required = { "before", "after", "idiom", "terms", },
+      required = { "code", },
     },
   },
 }
@@ -100,46 +95,84 @@ local function lines_ok(t)
   return true
 end
 
---- generate one fresh fixture via the model; nil if it can't be made valid.
-local function generate()
-  local a = request(PROMPT, TOOL)
-  if not (a and lines_ok(a.before) and lines_ok(a.after)) then return nil end
-  -- the edit must be a real (non-trivial) change, or there's nothing to suggest on
-  if diff.compute(a.before, a.after) == nil then return nil end
-  local terms = lines_ok(a.terms) and a.terms or { tostring(a.idiom or ""):lower(), }
+-- treat the whole generated function as a just-typed edit: empty buffer -> code,
+-- so the diff the plugin sees is the function itself.
+local EMPTY = { "", }
+
+--- generate one fresh fixture of `category` via the model; nil if invalid.
+---@param category "beginner"|"advanced"
+local function generate(category)
+  local a = request(PROMPTS[category], TOOL)
+  if not (a and lines_ok(a.code)) then return nil end
+  if diff.compute(EMPTY, a.code) == nil then return nil end -- must be a real edit
   return {
-    name = "ai:" .. tostring(a.idiom),
+    name = category .. ":" .. (a.note or "?"),
+    category = category,
     ft = "python",
-    start = 0,
-    before = a.before,
-    after = a.after,
-    terms = terms,
+    before = EMPTY,
+    after = a.code,
     generated = true,
   }
 end
 
--- deterministic safety net (only used if generation fails) — clearly marked so a
--- fallback is visible in test output rather than masquerading as a fresh fixture.
-local function fallback()
+-- deterministic safety net (only if generation fails) — clearly marked.
+local FALLBACKS = {
+  beginner = {
+    "def total(xs):", "    acc = 0", "    for x in xs:", "        acc = acc + x", "    return acc",
+  },
+  advanced = {
+    "def is_empty(xs):", "    if len(xs) == 0:", "        return True", "    return False",
+  },
+}
+local function fallback(category)
   return {
-    name = "fallback:loop->sum",
+    name = "fallback:" .. category,
+    category = category,
     ft = "python",
-    start = 0,
-    before = { "def total(xs):", "    acc = 0", "    for x in xs:", "        pass", },
-    after = { "def total(xs):", "    acc = 0", "    for x in xs:", "        acc += x", "    return acc", },
-    terms = { "sum", },
+    before = EMPTY,
+    after = FALLBACKS[category],
     generated = false,
   }
 end
 
---- a freshly model-generated edit fixture (falls back to a template on failure).
----@return { name: string, ft: string, start: integer, before: string[], after: string[], terms: string[], generated: boolean }
-function Fixtures.fresh()
+--- a freshly model-generated fixture of `category` (falls back on failure).
+---@param category "beginner"|"advanced"
+---@return { name: string, category: string, ft: string, before: string[], after: string[], generated: boolean }
+function Fixtures.fresh(category)
   for _ = 1, 3 do
-    local f = generate()
+    local f = generate(category)
     if f then return f end
   end
-  return fallback()
+  return fallback(category)
 end
+
+-- hand-curated clean fixtures (each the `after` function body), grouped by the
+-- skill level the missed feature belongs to. they anchor the live classification
+-- test: the model should rank these roughly in this order (beginner lowest,
+-- master highest). the free generator can't reliably produce the higher levels
+-- (it tends to emit obvious misses), so these are fixed and ordering-verified.
+-- Levels mirror learning.config.LEVELS.
+Fixtures.CURATED = {
+  -- a clear miss of a core builtin
+  beginner = {
+    { "def total(xs):", "    acc = 0", "    for x in xs:", "        acc = acc + x", "    return acc", },
+    { "def show(items):", "    for i in range(len(items)):", "        print(i, items[i])", },
+  },
+  -- an everyday idiom a beginner could easily miss
+  intermediate = {
+    { "def pairs(a, b):", "    for i in range(len(a)):", "        print(a[i], b[i])", },
+    { "def get_or_none(d, k):", "    if k in d:", "        return d[k]", "    return None", },
+  },
+  -- a non-obvious refinement of already-working code
+  advanced = {
+    { "def sq_sum(xs):", "    return sum([x * x for x in xs])", },
+    { "def is_empty(xs):", "    if len(xs) == 0:", "        return True", "    return False", },
+  },
+  -- an expert-level construct most code never needs
+  master = {
+    { "def squares_sum(xs):", "    squares = [x * x for x in xs]", "    return sum(squares)", },
+    { "def first_even(xs):", "    for x in xs:", "        if x % 2 == 0:", "            return x", "    return None", },
+  },
+}
 
 return Fixtures

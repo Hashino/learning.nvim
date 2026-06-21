@@ -19,6 +19,15 @@ local schedule_suggestion
 --- setup learning.nvim
 ---@param opts? learning.Config
 function Learning.setup(opts)
+  -- `eagerness` was replaced by automatic per-language skill-level progression
+  -- (config.LEVELS + unlock_threshold). Warn rather than silently ignore it, as
+  -- users often update without reading the breaking-change note.
+  if opts and opts.eagerness ~= nil then
+    vim.deprecate("require('learning').setup({ eagerness })",
+      "automatic skill-level progression (remove the option; tune `unlock_threshold` instead)",
+      "a future release", "learning.nvim", false)
+  end
+
   config.options = vim.tbl_deep_extend("force", config.options, opts or {})
 
   if type(config.options.ignored_buffers) == "function" then
@@ -65,9 +74,18 @@ function Learning.show(toedit, suggestion)
   -- only offer "accept" when the model returned a well-formed replacement
   local edit = utils.valid_edit(suggestion.edit)
 
+  -- engaging with an auto-suggestion (either accepting or dismissing it) counts
+  -- toward unlocking the next skill level for this language.
+  local function record_engagement()
+    if suggestion.track_dismiss then
+      store.record_interaction(suggestion.language, suggestion.level)
+    end
+  end
+
   window.show({
     summary = suggestion.summary,
     on_dismiss = function()
+      record_engagement()
       -- only explicit dismissals of auto-suggestions count toward suppression;
       -- accepting an edit or replacing the window does not.
       if suggestion.track_dismiss then
@@ -75,6 +93,7 @@ function Learning.show(toedit, suggestion)
       end
     end,
     on_accept = edit and function()
+      record_engagement()
       -- guard against out-of-range indices from a malformed model edit
       local ok = pcall(vim.api.nvim_buf_set_lines, toedit, edit.start, edit.final, false, edit.content)
       if ok and vim.api.nvim_buf_is_valid(toedit) and vim.api.nvim_buf_is_loaded(toedit) then
@@ -116,7 +135,7 @@ end
 
 --- diffs the current buffer against its last snapshot, asks the model about
 --- the change, and shows the result through the dismissal suppression and
---- eagerness gate.
+--- skill-level gates.
 local function send_suggestion()
   if not Learning.enabled or not utils.should_suggest() then return end
 
@@ -144,10 +163,14 @@ local function send_suggestion()
       vim.b[buf].learning_old = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     end
     if not suggestion then return end
+    local language = suggestion.language or filetype
+    -- nothing worth teaching on these lines
+    if suggestion.level == nil or suggestion.level == "none" then return end
     -- enforce suppression client-side even if the model ignored the hint
-    if store.is_suppressed(suggestion.language or filetype, suggestion.feature) then return end
-    -- eagerness gate: higher eagerness lowers the importance bar (0 disables)
-    if utils.meets_eagerness(suggestion.importance) then
+    if store.is_suppressed(language, suggestion.feature) then return end
+    -- skill-level gate: only show features at or below the user's unlocked level
+    if store.is_unlocked(language, suggestion.level) then
+      suggestion.language = language
       suggestion.track_dismiss = true
       Learning.show(buf, suggestion)
     end

@@ -39,7 +39,7 @@ lazy.nvim:
 {
   "Hashino/learning.nvim",
   opts = {
-      eagerness = 0.25, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
+      unlock_threshold = 5, -- suggestions to engage with at your current skill level before the next one unlocks
       debounce_ms = 250, -- debounce interval in ms before sending accumulated edits
       dismiss_threshold = 2, -- dismissals of a feature before its suggestions are suppressed
       ignored_buffers = { ".gitignore", ".git/COMMIT_EDITMSG" }, -- buffers to skip. string array or fun():string[], matched against filetype/filename/filepath
@@ -57,9 +57,9 @@ vim.pack:
 ```lua
 vim.pack.add({ "https://github.com/Hashino/learning.nvim", })
 require("learning").setup({
-  eagerness = 0.25, -- how eager the plugin is to show suggestions, between 0 and 1. higher means more suggestions
+  unlock_threshold = 5, -- suggestions to engage with at your current skill level before the next one unlocks
   debounce_ms = 250, -- debounce interval in ms before sending accumulated edits
-      ignored_buffers = { ".gitignore", ".git/COMMIT_EDITMSG" }, -- buffers to skip. string array or fun():string[], matched against filetype/filename/filepath
+  ignored_buffers = { ".gitignore", ".git/COMMIT_EDITMSG" }, -- buffers to skip. string array or fun():string[], matched against filetype/filename/filepath
 
   provider = {
     api_key = "", -- your API key. be careful putting it in your dotfiles
@@ -97,7 +97,14 @@ vim.keymap.set("v", "<leader>le", require("learning").explain, { desc = "[E]xp[l
 
 ## how it works
 
-After each edit, the plugin snapshots the buffer and computes a diff to detect what changed. After a configurable debounce period of inactivity (`debounce_ms`), the changed lines (with surrounding context) are sent to an AI provider, which returns a relevant language tip as a structured suggestion. The suggestion is shown in a floating window — press `keys.confirm` to accept the edit or `keys.dismiss` to dismiss. An `eagerness` setting (0–1) controls how selectively suggestions are shown based on the AI's reported importance.
+After each edit, the plugin snapshots the buffer and computes a diff to detect what changed. After a configurable debounce period of inactivity (`debounce_ms`), the changed lines (with surrounding context) are sent to an AI provider, which returns a relevant language tip as a structured suggestion, classified by skill level (`beginner`, `intermediate`, `advanced`, `master`). The suggestion is shown in a floating window — press `keys.confirm` to accept the edit or `keys.dismiss` to dismiss.
+
+Suggestions are revealed in pedagogical order: you start seeing only `beginner` tips, and each time you engage with `unlock_threshold` suggestions (accepting *or* dismissing) at your current top level, the next level unlocks. Progress is tracked **per language** in `~/.local/share/nvim/learning.nvim/progress.json` — so you can be a Python beginner and a Rust master at once. Delete that file to reset.
+
+> **Breaking change:** the old `eagerness` option has been replaced by this
+> automatic skill-level progression. If you still pass `eagerness`, it is ignored
+> and Neovim shows a deprecation warning — remove it and tune `unlock_threshold`
+> instead.
 
 ## config
 
@@ -109,9 +116,9 @@ After each edit, the plugin snapshots the buffer and computes a diff to detect w
 
 ```lua
 require("learning").setup({
-  -- how eager the plugin is to show suggestions, between 0 and 1.
-  -- higher means more suggestions
-  eagerness = 0.25,
+  -- how many suggestions you engage with (accept or dismiss) at your current top
+  -- skill level before the next level unlocks. lower = level up faster.
+  unlock_threshold = 5,
 
   -- debounce interval in ms before sending accumulated edits
   debounce_ms = 250,
@@ -161,6 +168,6 @@ XDG_DATA_HOME=/tmp/learning-test nvim --headless \
 ```
 
 Only run it after a **big change to the main logic** (edit detection, prompts,
-tool calls, eagerness gating, or dismissal suppression), and run it a few times
-since the backend is a live model. See [`tests/tests.md`](tests/tests.md) for what
-it covers and an optional interactive smoke.
+tool calls, skill-level classification/gating, or dismissal suppression), and run
+it a few times since the backend is a live model. See [`tests/tests.md`](tests/tests.md)
+for what it covers and an optional interactive smoke.

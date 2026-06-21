@@ -102,13 +102,26 @@ function Utils.visual_selection(buf)
   return lines
 end
 
---- whether a suggestion of the given importance clears the eagerness bar.
---- higher eagerness lowers the bar; eagerness 0 disables suggestions entirely.
----@param importance number? the model's importance score (0..1)
----@return boolean
-function Utils.meets_eagerness(importance)
-  local eagerness = config.options.eagerness
-  return eagerness > 0 and (importance or 0) >= 1 - eagerness
+--- position of a skill level in config.LEVELS (1-based), or nil if unknown.
+---@param level string?
+---@return integer?
+function Utils.level_index(level)
+  for i, l in ipairs(config.LEVELS) do
+    if l == level then return i end
+  end
+  return nil
+end
+
+--- coerces a model-supplied skill level into a known value. an explicit "none"
+--- (nothing worth teaching) is preserved; anything missing or unrecognized
+--- degrades to the lowest level so a weak model never silences the plugin.
+---@param raw any
+---@return string "none" or one of config.LEVELS
+function Utils.normalize_level(raw)
+  local s = vim.trim(tostring(raw or ""):lower())
+  if s == "none" then return "none" end
+  if Utils.level_index(s) then return s end
+  return config.LEVELS[1]
 end
 
 return Utils

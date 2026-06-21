@@ -3,18 +3,19 @@
 -- reached with no Authorization header. `provider.headers` blanking Authorization
 -- is a development-only escape hatch; do not use this pattern in real configs.
 --
--- Returns a function so each `tests/init*.lua` can pick a different eagerness
--- level while sharing one provider/keymap definition.
+-- Returns a function so each `tests/init*.lua` can override a few options (e.g.
+-- unlock_threshold) while sharing one provider/keymap definition.
 --
----@param eagerness number eagerness level under test (0..1)
-return function(eagerness)
+---@param overrides? table options merged over the keyless defaults
+return function(overrides)
   vim.opt.number = true
   vim.opt.relativenumber = false
 
   vim.opt.rtp:append("/home/hashino/.local/share/nvim/site/pack/core/opt/learning.nvim")
 
-  require("learning").setup({
-    eagerness = eagerness,
+  require("learning").setup(vim.tbl_deep_extend("force", {
+    -- unlock_threshold left at its default; the runner drives progression
+    -- explicitly and the smoke test starts every language at "beginner".
     debounce_ms = 250,
     dismiss_threshold = 2,
     provider = {
@@ -24,11 +25,11 @@ return function(eagerness)
       headers = { Authorization = "", }, -- DEV ONLY: Zen free tier wants no auth header
     },
     keys = { confirm = "<C-a>", },       -- PTY-sendable confirm key (see tests.md)
-  })
+  }, overrides or {}))
 
   vim.keymap.set("v", "<leader>le", function()
     require("learning").explain()
   end, { desc = "[L]earning [E]xplain", })
 
-  vim.notify("[learning.nvim tests] eagerness = " .. tostring(eagerness))
+  vim.notify("[learning.nvim tests] keyless skill-stage config loaded")
 end
