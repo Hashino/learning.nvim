@@ -82,8 +82,9 @@ end
 ---@param prompt string
 ---@param tools table[]
 ---@param tool_name string name of the tool the model must use
+---@param mode? "force"|"auto" tool_choice strategy; some "thinking" models reject forced
 ---@return table headers, string body, boolean anthropic
-local function build_request(prompt, tools, tool_name)
+local function build_request(prompt, tools, tool_name, mode)
   local anthropic = is_anthropic()
 
   local headers = { ["Content-Type"] = "application/json", }
@@ -100,10 +101,10 @@ local function build_request(prompt, tools, tool_name)
     payload.tool_choice = { type = "tool", name = tool_name, }
   else
     headers["Authorization"] = "Bearer " .. config.options.provider.api_key
-    payload.tool_choice = {
-      type = "function",
-      ["function"] = { name = tool_name, },
-    }
+    -- "auto" is the fallback for models that reject a forced tool_choice; we then
+    -- rely on the prompt's "answer by calling the tool" instruction (see below).
+    payload.tool_choice = mode == "auto" and "auto"
+        or { type = "function", ["function"] = { name = tool_name, }, }
   end
 
   -- DEVELOPMENT ONLY: merge user-supplied headers over the defaults so the test
@@ -128,17 +129,23 @@ local MAX_ATTEMPTS = 3
 ---@param tool_name string
 ---@param callback fun(arguments: table?)
 local function make_ai_request(prompt, tools, tool_name, callback)
-  local headers, body, anthropic = build_request(prompt, tools, tool_name)
+  local anthropic = is_anthropic()
 
-  local cmd = { "curl", "-s", "-X", "POST", config.options.provider.api_url, }
-  for k, v in pairs(headers) do
-    table.insert(cmd, "-H")
-    table.insert(cmd, k .. ": " .. v)
+  local function build_cmd(mode)
+    local headers, body = build_request(prompt, tools, tool_name, mode)
+    local cmd = { "curl", "-s", "-X", "POST", config.options.provider.api_url, }
+    for k, v in pairs(headers) do
+      table.insert(cmd, "-H")
+      table.insert(cmd, k .. ": " .. v)
+    end
+    table.insert(cmd, "-d")
+    table.insert(cmd, body)
+    return cmd
   end
-  table.insert(cmd, "-d")
-  table.insert(cmd, body)
 
-  local function attempt(n)
+  --- @param n integer attempt number
+  --- @param mode "force"|"auto" current tool_choice strategy
+  local function attempt(n, mode)
     -- settle this attempt exactly once: with a usable result (-> callback), or
     -- as a failure (-> retry while attempts remain, else callback(nil)). guards
     -- against curl emitting both on_stdout and on_exit, or no output at all.
@@ -149,13 +156,13 @@ local function make_ai_request(prompt, tools, tool_name, callback)
       if usable then
         callback(arg)
       elseif n < MAX_ATTEMPTS then
-        attempt(n + 1)
+        attempt(n + 1, mode)
       else
         callback(nil)
       end
     end
 
-    vim.fn.jobstart(cmd, {
+    vim.fn.jobstart(build_cmd(mode), {
       stdout_buffered = true,
       on_stdout = function(_, data, _)
         if not data then return end
@@ -164,6 +171,14 @@ local function make_ai_request(prompt, tools, tool_name, callback)
           local ok, decoded = pcall(vim.json.decode, table.concat(data, ""))
           if not ok or type(decoded) ~= "table" then
             return settle(nil, false) -- unparseable -> retry
+          end
+
+          -- some "thinking" models reject a forced tool_choice; retry the same
+          -- attempt with "auto" before counting it as a failure.
+          if mode == "force" and not done and decoded.error
+              and tostring(decoded.error.message or ""):find("tool_choice") then
+            done = true
+            return attempt(n, "auto")
           end
 
           for _, tc in ipairs(extract_tool_calls(decoded, anthropic)) do
@@ -185,7 +200,7 @@ local function make_ai_request(prompt, tools, tool_name, callback)
     })
   end
 
-  attempt(1)
+  attempt(1, "force")
 end
 
 ---@class learning.Suggestion
