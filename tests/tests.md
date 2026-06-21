@@ -63,26 +63,31 @@ fail an otherwise-correct run. If a provider still makes the suite flicker a lot
 that provider's tool-calling is unreliable — try the eagerness checks against a
 stronger model before suspecting the plugin.
 
-## Interactive smoke (optional, tui-use)
+## End-to-end smoke (tui-use) — always run this last
 
-A quick eyeball of the real UI the headless runner can't render. Use a **small
-terminal** to keep it cheap.
+The headless runner calls plugin functions directly, so it never exercises the
+real `keystroke → autocmd → debounce → window → keymap` path. [`tests/smoke.sh`](smoke.sh)
+closes that gap: it drives **one real Neovim session** through every behaviour and
+asserts each. **Always finish a suite run with it.**
 
 ```sh
-nvim -n -u custom_nvim_config/init.lua /tmp/sample.py
+tests/smoke.sh                          # keyless free Zen (tests/init.lua)
+tests/smoke.sh custom_nvim_config/init.lua   # faster personal provider
 ```
 
-1. Change `return result` → `return sum(numbers)` (leave insert mode). Within a
-   few seconds a `[Learning]` window opens teaching `sum`. Dismiss with `<Esc>`.
-2. Visually select the function and run `:Learning explain`. A dismiss-only
-   `[Learning]` window explains the selection.
+It needs the `tui-use` CLI on `PATH`, runs in a small terminal to stay cheap,
+isolates dismissal state via `XDG_DATA_HOME`, prints `PASS`/`FAIL` per behaviour,
+and exits non-zero on any failure. In one session it covers:
 
-`/tmp/sample.py` (recreate if missing):
+- startup with no fatal config error
+- `:Learning explain` with no selection → notifies
+- a trivial reindent → **no** window (edit detection)
+- a meaningful edit → a suggestion window opens
+- the dismissal cycle: same feature shows twice, then is suppressed at the threshold
+- `:Learning explain` on a real visual selection → an explanation window opens
+- `:Learning disable` → no suggestions; `:Learning enable` → suggestions resume
 
-```python
-def total(numbers):
-    result = 0
-    for n in numbers:
-        result = result + n
-    return result
-```
+It asserts the *interactive behaviour* (a window does / doesn't open). Content
+relevance — that a suggestion actually concerns the edit, or an explanation the
+selection — is asserted against the raw model response in `tests/run.lua`, which
+isn't subject to the float's mid-word line wrapping.
