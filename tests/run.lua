@@ -122,6 +122,131 @@ do
     store.is_suppressed("python", "e2e-explain") == false)
 end
 
+local function approx(a, b) return type(a) == "number" and math.abs(a - b) < 1e-9 end
+
+-- response parsing (ai._test): both provider shapes, fallbacks, malformed input.
+-- this is what a single live provider can never exercise — the OTHER shape.
+do
+  local t = ai._test
+  local openai = { choices = { { message = { tool_calls = {
+    { type = "function", ["function"] = { name = "suggest", arguments = '{"explanation":"x","importance":8}' }, },
+  }, }, }, }, }
+  local oc = t.extract_tool_calls(openai, false)
+  check("parse: openai tool_calls extracted",
+    #oc == 1 and oc[1].name == "suggest" and oc[1].arguments.importance == 8)
+
+  local anthropic = { content = {
+    { type = "text", text = "preamble", },
+    { type = "tool_use", name = "suggest", input = { explanation = "y", importance = 9 }, },
+  }, }
+  local ac = t.extract_tool_calls(anthropic, true)
+  check("parse: anthropic tool_use extracted",
+    #ac == 1 and ac[1].name == "suggest" and ac[1].arguments.importance == 9)
+
+  check("parse: openai content fallback",
+    t.extract_content({ choices = { { message = { content = "hello" }, }, }, }, false) == "hello")
+  check("parse: anthropic content fallback",
+    t.extract_content({ content = { { type = "text", text = "hello" }, }, }, true) == "hello")
+
+  local bad = { choices = { { message = { tool_calls = {
+    { type = "function", ["function"] = { name = "suggest", arguments = "{not valid json" }, },
+  }, }, }, }, }
+  check("parse: malformed tool arguments skipped, no crash", #t.extract_tool_calls(bad, false) == 0)
+  check("parse: empty response yields no tool calls", #t.extract_tool_calls({}, false) == 0)
+end
+
+-- importance normalization edge values (the 9 -> 0.9 bug class)
+do
+  local ni = ai._test.normalize_importance
+  check("normalize: 8 -> 0.8", approx(ni(8), 0.8))
+  check("normalize: 10 -> 1", approx(ni(10), 1))
+  check("normalize: already 0.9 stays", approx(ni(0.9), 0.9))
+  check("normalize: >10 clamps to 1", approx(ni(15), 1))
+  check("normalize: negative clamps to 0", approx(ni(-3), 0))
+  check("normalize: nil -> 0", approx(ni(nil), 0))
+  check("normalize: numeric string '7' -> 0.7", approx(ni("7"), 0.7))
+end
+
+-- eagerness gate arithmetic at the boundaries (no model needed)
+do
+  local function at(e, imp)
+    config.options.eagerness = e
+    return utils.meets_eagerness(imp)
+  end
+  check("gate: eagerness 0 never shows", at(0, 1) == false and at(0, 0.5) == false)
+  check("gate: eagerness 1 shows any importance", at(1, 0) == true)
+  check("gate: 0.25 shows iff importance >= 0.75", at(0.25, 0.75) == true and at(0.25, 0.74) == false)
+  check("gate: 0.75 shows iff importance >= 0.25", at(0.75, 0.25) == true and at(0.75, 0.24) == false)
+  check("gate: nil importance treated as 0", at(0.75, nil) == false)
+end
+
+-- more diff edge cases
+check("diff: identical buffers -> nil", diff.compute({ "a", "b" }, { "a", "b" }) == nil)
+check("diff: trailing-whitespace-only change is trivial",
+  diff.compute({ "x = 1" }, { "x = 1   " }) == nil)
+do
+  local d = diff.compute(
+    { "def f():", "    return 1" },
+    { "def f():", "    return 1", "def g():", "    return sum(x)" })
+  check("diff: bottom-of-file insertion localizes",
+    d ~= nil and table.concat(d.new_content, "\n"):find("sum") ~= nil)
+end
+do
+  local d = diff.compute(
+    { "x = 1", "a", "b", "c", "d", "e", "y = 2" },
+    { "x = sum(a)", "a", "b", "c", "d", "e", "y = max(b)" })
+  check("diff: multiple separate hunks captured",
+    d ~= nil and table.concat(d.new_content, "\n"):find("sum") and table.concat(d.new_content, "\n"):find("max"))
+end
+
+-- valid_edit with wrong field types
+---@diagnostic disable-next-line: assign-type-mismatch
+check("valid_edit: non-numeric start rejected", utils.valid_edit({ start = "0", final = 1, content = { "x" } }) == nil)
+---@diagnostic disable-next-line: assign-type-mismatch
+check("valid_edit: non-table content rejected", utils.valid_edit({ start = 0, final = 1, content = "x" }) == nil)
+
+-- visual_selection extraction (linewise) given real marks + visualmode
+do
+  local b = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(b, 0, -1, false, { "alpha beta", "gamma delta", "epsilon" })
+  vim.api.nvim_set_current_buf(b)
+  -- linewise-select lines 1-2 and leave visual (the <Esc> must be in the same
+  -- normal! sequence, or the '<'> marks are never set)
+  vim.cmd("normal! ggVj\27")
+  local lines = utils.visual_selection(b)
+  check("visual_selection: linewise returns the full selected lines",
+    lines ~= nil and #lines == 2 and lines[1] == "alpha beta" and lines[2] == "gamma delta")
+end
+
+-- store: key normalization, empty-feature no-op
+do
+  config.options.dismiss_threshold = 2
+  store.record_dismiss("Python", "  F-Strings  ")
+  store.record_dismiss("python", "f-strings")
+  check("store: language/feature keys are case/space normalized",
+    store.is_suppressed("PYTHON", "F-STRINGS") == true)
+  store.record_dismiss("python", "")
+  check("store: empty feature is a no-op", store.is_suppressed("python", "") == false)
+end
+
+-- store: persistence across a reload, and graceful handling of a corrupt file
+do
+  config.options.dismiss_threshold = 1
+  store.record_dismiss("python", "persist-probe")
+  package.loaded["learning.store"] = nil
+  check("store: dismissals persist across a module reload",
+    require("learning.store").is_suppressed("python", "persist-probe") == true)
+
+  local dir = vim.fs.joinpath(vim.fn.stdpath("data"), "learning.nvim")
+  vim.fn.mkdir(dir, "p")
+  vim.fn.writefile({ "{ not valid json" }, vim.fs.joinpath(dir, "dismissed.json"))
+  package.loaded["learning.store"] = nil
+  check("store: corrupt json degrades gracefully (nothing suppressed, no crash)",
+    require("learning.store").is_suppressed("python", "anything") == false)
+  package.loaded["learning.store"] = nil
+  require("learning.store") -- leave the module loaded again
+end
+
 -- model-dependent checks — need a tool-calling provider
 
 local sum_edit = {

@@ -147,7 +147,7 @@ local function send_suggestion()
     -- enforce suppression client-side even if the model ignored the hint
     if store.is_suppressed(suggestion.language or filetype, suggestion.feature) then return end
     -- eagerness gate: higher eagerness lowers the importance bar (0 disables)
-    if config.options.eagerness > 0 and (suggestion.importance or 0) >= 1 - config.options.eagerness then
+    if utils.meets_eagerness(suggestion.importance) then
       suggestion.track_dismiss = true
       Learning.show(buf, suggestion)
     end

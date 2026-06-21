@@ -102,4 +102,13 @@ function Utils.visual_selection(buf)
   return lines
 end
 
+--- whether a suggestion of the given importance clears the eagerness bar.
+--- higher eagerness lowers the bar; eagerness 0 disables suggestions entirely.
+---@param importance number? the model's importance score (0..1)
+---@return boolean
+function Utils.meets_eagerness(importance)
+  local eagerness = config.options.eagerness
+  return eagerness > 0 and (importance or 0) >= 1 - eagerness
+end
+
 return Utils

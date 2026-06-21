@@ -347,4 +347,12 @@ function AI.explain(code, filetype, callback)
   end)
 end
 
+-- exposed for tests/run.lua to exercise response parsing and importance
+-- normalization deterministically, without a live provider.
+AI._test = {
+  extract_tool_calls = extract_tool_calls,
+  extract_content = extract_content,
+  normalize_importance = normalize_importance,
+}
+
 return AI
