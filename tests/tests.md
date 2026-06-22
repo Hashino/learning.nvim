@@ -44,14 +44,20 @@ the progression probes start from the lowest level.
   `unlock_threshold` suggestions *at the current top level* unlocks the next one
   (and only top-level engagement counts); progress is per-language and persists
   across reloads, capped at `master`.
+- **Cascade gate** (deterministic) — `store.should_teach` pays for stage 2 only
+  when the classification is teachable: level is neither `nil` nor `none`, the
+  feature isn't suppressed, and its level is unlocked. All branches are pure.
 - **Explain, no selection** — `Learning.explain()` with nothing selected notifies
   and opens no window.
-- **Auto-suggestion** — returns a result relevant to the edited lines, classified
-  with a known skill `level` and a well-formed edit.
+- **Stage 1, classify (live)** — on freshly generated misses, returns a known
+  skill `level` and a non-empty `feature`.
+- **Stage 2, teach (live)** — on a clear beginner miss, returns a non-empty prose
+  explanation and a well-formed structured edit; whether the prose leaked a fenced
+  code block (the dedup rule) is printed as `INFO  teach dedup: ...`.
 - **Level ordering (live)** — curated fixtures grouped by level
-  (`fixtures.CURATED`) classify in roughly increasing order: the `beginner`
-  cluster lands lowest, `master` highest, with the middles in between. Printed as
-  `INFO  level classification: ...` every run.
+  (`fixtures.CURATED`) classify (stage 1) in roughly increasing order: the
+  `beginner` cluster lands lowest, `master` highest, with the middles in between.
+  Printed as `INFO  level classification: ...` every run.
 - **Explain, relevance** — explaining a distinctive construct names it (a list
   comprehension → "comprehension").
 

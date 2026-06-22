@@ -22,7 +22,8 @@ function Learning.setup(opts)
   -- `eagerness` was replaced by automatic per-language skill-level progression
   -- (config.LEVELS + unlock_threshold). Warn rather than silently ignore it, as
   -- users often update without reading the breaking-change note.
-  if opts and opts.eagerness ~= nil then
+  ---@diagnostic disable-next-line: undefined-field
+  if opts and opts.eagerness ~= nil then -- intentionally not in learning.Config
     vim.deprecate("require('learning').setup({ eagerness })",
       "automatic skill-level progression (remove the option; tune `unlock_threshold` instead)",
       "a future release", "learning.nvim", false)

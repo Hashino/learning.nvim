@@ -106,7 +106,13 @@ vim.keymap.set("v", "<leader>le", require("learning").explain, { desc = "[E]xp[l
 
 ## how it works
 
-After each edit, the plugin snapshots the buffer and computes a diff to detect what changed. After a configurable debounce period of inactivity (`debounce_ms`), the changed lines (with surrounding context) are sent to an AI provider, which returns a relevant language tip as a structured suggestion, classified by skill level (`beginner`, `intermediate`, `advanced`, `master`). The suggestion is shown in a floating window — press `keys.confirm` to accept the edit or `keys.dismiss` to dismiss.
+After each edit, the plugin snapshots the buffer and computes a diff to detect what changed. After a configurable debounce period of inactivity (`debounce_ms`), the changed lines (with surrounding context) run through a two-stage cascade:
+
+1. **classify** (cheap, every edit) — the model names the single language feature the change misses and ranks how obvious the miss is (`none` / `beginner` / `intermediate` / `advanced` / `master`).
+2. a deterministic gate decides whether it's worth teaching: the feature must not be already-idiomatic (`none`), not [suppressed](#suppressing-repeated-suggestions), and at a skill level you've unlocked.
+3. **teach** (only when the gate passes) — the model writes the tip and the concrete idiomatic rewrite.
+
+Most edits stop at stage 1, so the common path is a single small request. When a suggestion does fire, it's shown in a floating window with the rewrite as a red/green diff above the explanation — press `keys.confirm` to accept the edit or `keys.dismiss` to dismiss.
 
 Suggestions are revealed in pedagogical order: you start seeing only `beginner` tips, and each time you engage with `unlock_threshold` suggestions (accepting *or* dismissing) at your current top level, the next level unlocks. Progress is tracked **per language** in `~/.local/share/nvim/learning.nvim/progress.json` — so you can be a Python beginner and a Rust master at once. Delete that file to reset.
 
