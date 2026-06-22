@@ -193,7 +193,12 @@ local function make_ai_request(prompt, tools, tool_name, callback)
   attempt(1, "force")
 end
 
----@class learning.Suggestion
+---@class learning.Classification stage-1 result: what feature the edit misses
+---@field feature string short identifier of the missed language feature
+---@field language string language the feature belongs to (the buffer filetype)
+---@field level string skill level of the miss ("none" or one of config.LEVELS)
+
+---@class learning.Suggestion stage-2 result shown to the user
 ---@field summary string explanation of the edit (markdown)
 ---@field feature? string short identifier of the language feature taught
 ---@field language? string language the feature belongs to (the buffer filetype)
@@ -206,64 +211,69 @@ end
 ---@field final integer final line of the edit (0-indexed, exclusive)
 ---@field content string[] the content of the edit
 
---- asks the model to teach a single language feature about an edit.
+-- the before/after region of an edit, the prompt fragment both stages share.
+---@param diff learning.Diff
+---@param filetype string
+---@return string
+local function region_block(diff, filetype)
+  local fence = "```" .. filetype .. "\n"
+  return table.concat({
+    "\n--- Region before the edit (context) ---\n" .. fence,
+    table.concat(diff.old_content, "\n"),
+    "\n```\n",
+    "\n--- Region after the edit (context) ---\n" .. fence,
+    table.concat(diff.new_content, "\n"),
+    "\n```\n",
+    "\nThe two blocks above are the same region of the file before and after the\n" ..
+    "edit; the surrounding lines are context only. Judge ONLY the lines that\n" ..
+    "actually differ between \"before\" and \"after\".\n",
+  })
+end
+
+-- rubric for the stage-1 level, framed by how OBVIOUS the miss is (not how clever
+-- the fix is). kept verbatim across runs so weak models get a stable anchor.
+local LEVEL_RUBRIC =
+  "Skill level of the missed feature, judged by how OBVIOUS the miss is — NOT " ..
+  "how clever the fix is. " ..
+  "\"none\" = the edited lines are already idiomatic, nothing to teach. " ..
+  "\"beginner\" = a clear beginner-level miss of a core builtin (manual accumulation " ..
+  "loop → sum, range(len(...)) indexing → enumerate, building strings with + → join, " ..
+  "append-loop → comprehension). " ..
+  "\"intermediate\" = a useful everyday idiom a beginner could easily miss " ..
+  "(enumerate/zip, dict.get, context managers, f-strings). " ..
+  "\"advanced\" = a non-obvious refinement that already-working code only marginally " ..
+  "benefits from (dropping brackets in `sum([...])`, `for k in d` vs `d.keys()`, " ..
+  "`not x` vs `len(x) == 0`, comprehension vs map/filter). " ..
+  "\"master\" = an expert-level construct most code never needs (generators over " ..
+  "lists for memory, __slots__, functools tricks). " ..
+  "Prefer \"none\" or \"advanced\" for already-working code; reserve \"beginner\" for obvious misses."
+
+--- STAGE 1 (cheap, every non-trivial edit): names the single language feature
+--- the edit misses and ranks how obvious the miss is. No explanation, no edit —
+--- so the common, gated-out path stays small. The client gate
+--- (`store.should_teach`) decides whether to pay for stage 2.
 ---@param diff learning.Diff
 ---@param filetype string filetype of the buffer being edited
----@param suppressed string[] features already dismissed for this language
----@param callback fun(suggestion: learning.Suggestion?)
-function AI.suggestion(diff, filetype, suppressed, callback)
-  local old_content = table.concat(diff.old_content, "\n")
-  local new_content = table.concat(diff.new_content, "\n")
-
-  local prompt_parts = {
+---@param callback fun(classification: learning.Classification?)
+function AI.classify(diff, filetype, callback)
+  local prompt = table.concat({
     "You are a language-learning assistant for " .. filetype .. ".\n" ..
-    "The user just made an edit. Teach a single language feature that is " ..
-    "relevant *exclusively* to what changed in this edit.\n",
-    "\n--- Region before the edit (context) ---\n```" .. filetype .. "\n",
-    old_content,
-    "\n```\n",
-    "\n--- Region after the edit (context) ---\n```" .. filetype .. "\n",
-    new_content,
-    "\n```\n",
-  }
-
-  if #suppressed > 0 then
-    table.insert(prompt_parts,
-      "\nThe user has already dismissed these features; do NOT teach them again " ..
-      "(use the `suggest` tool with level \"none\" if the edit only relates to them): " ..
-      table.concat(suppressed, ", ") .. "\n")
-  end
-
-  table.insert(prompt_parts, [[
-The two blocks above are the same region of the file before and after the edit.
-The surrounding lines are given only so you can understand the change; they are
-NOT the subject of your suggestion.
-
-Rules:
-- Base your suggestion ONLY on the lines that actually differ between "before"
-  and "after".
-- Do NOT mention, refactor, or react to any code that did not change in this
-  edit, even if you think it could be improved.
-- If the changed lines don't clearly miss an idiomatic ]] .. filetype .. [[ feature,
-  call the `suggest` tool with level "none".
-
-Always answer by calling the `suggest` tool. The "edit" field replaces buffer
-lines from "start" to "final" (0-indexed, "final" exclusive) with "content";
-omit it if you have no concrete replacement. Edits start at line ]] ..
-    tostring(diff.start) .. [[. Be concise.]])
+    "The user just made an edit. Identify a single " .. filetype .. " language " ..
+    "feature the changed lines MISS — an idiomatic improvement the edit could have " ..
+    "used — and classify how obvious that miss is.\n",
+    region_block(diff, filetype),
+    "\nAnswer by calling the `classify` tool. If the changed lines are already " ..
+    "idiomatic (nothing worth teaching), use level \"none\". Be concise.",
+  }, "\n")
 
   local anthropic = is_anthropic()
   local tools = {
-    make_tool(anthropic, "suggest",
-      "Teach a single language feature relevant to the edited lines.",
+    make_tool(anthropic, "classify",
+      "Name the single language feature the edited lines miss and rank the miss.",
       {
-        explanation = {
-          type = "string",
-          description = "Concise markdown tip about the edited lines, with a short code snippet.",
-        },
         feature = {
           type = "string",
-          description = "Short lowercase identifier of the single language feature taught, " ..
+          description = "Short lowercase identifier of the single missed feature, " ..
             "e.g. 'list comprehension', 'pattern matching', 'string interpolation'.",
         },
         language = {
@@ -273,24 +283,61 @@ omit it if you have no concrete replacement. Edits start at line ]] ..
         level = {
           type = "string",
           enum = { "none", "beginner", "intermediate", "advanced", "master", },
-          description = "Skill level of the missed feature, judged by how OBVIOUS the miss " ..
-            "is — NOT how clever the fix is. " ..
-            "\"none\" = the edited lines are already idiomatic, nothing to teach. " ..
-            "\"beginner\" = a clear beginner-level miss of a core builtin (manual accumulation " ..
-            "loop → sum, range(len(...)) indexing → enumerate, building strings with + → join, " ..
-            "append-loop → comprehension). " ..
-            "\"intermediate\" = a useful everyday idiom a beginner could easily miss " ..
-            "(enumerate/zip, dict.get, context managers, f-strings). " ..
-            "\"advanced\" = a non-obvious refinement that already-working code only marginally " ..
-            "benefits from (dropping brackets in `sum([...])`, `for k in d` vs `d.keys()`, " ..
-            "`not x` vs `len(x) == 0`, comprehension vs map/filter). " ..
-            "\"master\" = an expert-level construct most code never needs (generators over " ..
-            "lists for memory, __slots__, functools tricks). " ..
-            "Prefer \"none\" or \"advanced\" for already-working code; reserve \"beginner\" for obvious misses.",
+          description = LEVEL_RUBRIC,
+        },
+      },
+      { "feature", "language", "level", }),
+  }
+
+  make_ai_request(prompt, tools, "classify", function(args)
+    if not args or not args.feature then
+      callback(nil)
+      return
+    end
+    callback({
+      feature = args.feature,
+      language = args.language or filetype,
+      level = utils.normalize_level(args.level),
+    })
+  end)
+end
+
+--- STAGE 2 (heavy, only past the gate): teaches the feature stage 1 named and
+--- returns the concrete idiomatic rewrite as a structured edit. The explanation
+--- must NOT repeat the corrected code — it is rendered separately as a diff.
+---@param diff learning.Diff
+---@param filetype string filetype of the buffer being edited
+---@param feature string the feature stage 1 named, taught specifically
+---@param callback fun(suggestion: learning.Suggestion?)
+function AI.teach(diff, filetype, feature, callback)
+  local prompt = table.concat({
+    "You are a language-learning assistant for " .. filetype .. ".\n" ..
+    "Teach the user about this " .. filetype .. " feature: \"" .. feature .. "\". " ..
+    "It is relevant to the edit they just made.\n",
+    region_block(diff, filetype),
+    "\nAnswer by calling the `suggest` tool. Write a concise markdown explanation " ..
+    "of \"" .. feature .. "\" as it applies to the edited lines. The \"edit\" field " ..
+    "replaces buffer lines from \"start\" to \"final\" (0-indexed, \"final\" " ..
+    "exclusive) with \"content\" — include it with the idiomatic rewrite of the " ..
+    "edited lines, anchored at line " .. tostring(diff.start) .. ".\n" ..
+    "IMPORTANT: do NOT put the corrected/rewritten code in the explanation as a " ..
+    "fenced code block — the edit is shown separately as a red/green diff. Describe " ..
+    "the feature in prose (inline `names` are fine); do not repeat the full snippet.",
+  }, "\n")
+
+  local anthropic = is_anthropic()
+  local tools = {
+    make_tool(anthropic, "suggest",
+      "Teach the named language feature about the edited lines.",
+      {
+        explanation = {
+          type = "string",
+          description = "Concise markdown explanation of the feature, WITHOUT a fenced " ..
+            "code block repeating the corrected lines.",
         },
         edit = {
           type = "object",
-          description = "Optional concrete replacement for the edited lines.",
+          description = "Concrete idiomatic replacement for the edited lines.",
           properties = {
             start = { type = "integer", description = "start line, 0-indexed", },
             final = { type = "integer", description = "final line, 0-indexed exclusive", },
@@ -299,19 +346,16 @@ omit it if you have no concrete replacement. Edits start at line ]] ..
           required = { "start", "final", "content", },
         },
       },
-      { "explanation", "feature", "language", "level", }),
+      { "explanation", }),
   }
 
-  make_ai_request(table.concat(prompt_parts, "\n"), tools, "suggest", function(args)
-    if not args then
+  make_ai_request(prompt, tools, "suggest", function(args)
+    if not args or not args.explanation then
       callback(nil)
       return
     end
     callback({
       summary = args.explanation,
-      feature = args.feature,
-      language = args.language,
-      level = utils.normalize_level(args.level),
       edit = args.edit,
     })
   end)

@@ -74,6 +74,17 @@ function Learning.show(toedit, suggestion)
   -- only offer "accept" when the model returned a well-formed replacement
   local edit = utils.valid_edit(suggestion.edit)
 
+  -- a valid edit is shown as a red/green diff: the lines it would replace (still
+  -- in the buffer at show-time) are "before", its content is "after". this makes
+  -- the correction explicit, so the prose explanation never has to repeat it.
+  local diff_view
+  if edit and vim.api.nvim_buf_is_valid(toedit) and vim.api.nvim_buf_is_loaded(toedit) then
+    diff_view = {
+      before = vim.api.nvim_buf_get_lines(toedit, edit.start, edit.final, false),
+      after = edit.content,
+    }
+  end
+
   -- engaging with an auto-suggestion (either accepting or dismissing it) counts
   -- toward unlocking the next skill level for this language.
   local function record_engagement()
@@ -84,6 +95,7 @@ function Learning.show(toedit, suggestion)
 
   window.show({
     summary = suggestion.summary,
+    diff = diff_view,
     on_dismiss = function()
       record_engagement()
       -- only explicit dismissals of auto-suggestions count toward suppression;
@@ -133,9 +145,11 @@ end
 
 -- auto-suggestion pipeline, driven by the autocmds registered in `setup`
 
---- diffs the current buffer against its last snapshot, asks the model about
---- the change, and shows the result through the dismissal suppression and
---- skill-level gates.
+--- diffs the current buffer against its last snapshot and runs the two-stage
+--- cascade: a cheap stage-1 `classify` on every edit, then — only when the
+--- deterministic gate (`store.should_teach`) passes — the heavier stage-2
+--- `teach` that produces the shown suggestion. The `learning_pending` guard
+--- spans both calls so the gated-out common path stays a single small request.
 local function send_suggestion()
   if not Learning.enabled or not utils.should_suggest() then return end
 
@@ -156,24 +170,32 @@ local function send_suggestion()
 
   local filetype = vim.bo[buf].filetype
 
+  -- settle the in-flight guard exactly once, whichever stage the cascade ends on
   vim.b.learning_pending = true
-  ai.suggestion(change, filetype, store.suppressed_features(filetype), function(suggestion)
+  local function settle()
     if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
       vim.b[buf].learning_pending = false
       vim.b[buf].learning_old = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
     end
-    if not suggestion then return end
-    local language = suggestion.language or filetype
-    -- nothing worth teaching on these lines
-    if suggestion.level == nil or suggestion.level == "none" then return end
-    -- enforce suppression client-side even if the model ignored the hint
-    if store.is_suppressed(language, suggestion.feature) then return end
-    -- skill-level gate: only show features at or below the user's unlocked level
-    if store.is_unlocked(language, suggestion.level) then
+  end
+
+  ai.classify(change, filetype, function(classification)
+    if not classification then return settle() end
+    local language = classification.language
+    -- deterministic gate: skip stage 2 for nothing-to-teach / suppressed / locked
+    if not store.should_teach(language, classification.level, classification.feature) then
+      return settle()
+    end
+
+    ai.teach(change, filetype, classification.feature, function(suggestion)
+      settle()
+      if not suggestion then return end
+      suggestion.feature = classification.feature
       suggestion.language = language
+      suggestion.level = classification.level
       suggestion.track_dismiss = true
       Learning.show(buf, suggestion)
-    end
+    end)
   end)
 end
 

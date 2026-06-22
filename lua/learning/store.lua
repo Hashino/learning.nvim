@@ -155,6 +155,19 @@ function Store.is_unlocked(language, level)
   return idx ~= nil and idx <= utils.level_index(Store.unlocked_level(language))
 end
 
+--- the deterministic stage-2 gate: whether a stage-1 classification is worth
+--- paying the (heavy) teach call for. true only when the model found something
+--- to teach, the feature isn't suppressed, and the user has unlocked its level.
+---@param language string?
+---@param level string?
+---@param feature string?
+---@return boolean
+function Store.should_teach(language, level, feature)
+  if level == nil or level == "none" then return false end
+  if Store.is_suppressed(language, feature) then return false end
+  return Store.is_unlocked(language, level)
+end
+
 --- records the user engaging with a shown suggestion (accept or dismiss). only
 --- counts toward unlocking when the suggestion is at the current top level;
 --- reaching `unlock_threshold` unlocks the next level and resets the counter.
