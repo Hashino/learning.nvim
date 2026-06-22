@@ -123,20 +123,23 @@ end
 -- this is what a single live provider can never exercise — the OTHER shape.
 do
   local t = ai._test
+  -- stage-1 classify shape (openai) and stage-2 suggest/teach shape (anthropic)
   local openai = { choices = { { message = { tool_calls = {
-    { type = "function", ["function"] = { name = "suggest", arguments = '{"explanation":"x","level":"beginner"}' }, },
+    { type = "function", ["function"] = { name = "classify",
+      arguments = '{"feature":"f-strings","language":"python","level":"beginner"}' }, },
   }, }, }, }, }
   local oc = t.extract_tool_calls(openai, false)
   check("parse: openai tool_calls extracted",
-    #oc == 1 and oc[1].name == "suggest" and oc[1].arguments.level == "beginner")
+    #oc == 1 and oc[1].name == "classify" and oc[1].arguments.level == "beginner")
 
   local anthropic = { content = {
     { type = "text", text = "preamble", },
-    { type = "tool_use", name = "suggest", input = { explanation = "y", level = "advanced" }, },
+    { type = "tool_use", name = "suggest",
+      input = { explanation = "y", edit = { start = 0, final = 1, content = { "x", }, }, }, },
   }, }
   local ac = t.extract_tool_calls(anthropic, true)
   check("parse: anthropic tool_use extracted",
-    #ac == 1 and ac[1].name == "suggest" and ac[1].arguments.level == "advanced")
+    #ac == 1 and ac[1].name == "suggest" and ac[1].arguments.explanation == "y")
 
   check("parse: openai content fallback",
     t.extract_content({ choices = { { message = { content = "hello" }, }, }, }, false) == "hello")
@@ -189,6 +192,23 @@ do
 
   -- progress is per-language: an untouched language is still at the start
   check("progress: independent per language", store.unlocked_level("other-lang") == config.LEVELS[1])
+end
+
+-- the deterministic stage-2 gate (store.should_teach): the cascade pays for the
+-- heavy teach call only when the model found something to teach, the feature
+-- isn't suppressed, and its level is unlocked. all three branches are pure.
+do
+  config.options.dismiss_threshold = 1
+  local lang = "gate-probe-lang" -- fresh: starts at beginner, nothing suppressed
+  check("gate: 'none' level never teaches", store.should_teach(lang, "none", "gate-feat") == false)
+  check("gate: nil level never teaches", store.should_teach(lang, nil, "gate-feat") == false)
+  check("gate: unlocked + unsuppressed feature teaches",
+    store.should_teach(lang, "beginner", "gate-feat") == true)
+  check("gate: a locked level does not teach",
+    store.should_teach(lang, "intermediate", "gate-feat") == false)
+  store.record_dismiss(lang, "gate-suppressed") -- threshold 1 -> suppressed
+  check("gate: a suppressed feature does not teach even when unlocked",
+    store.should_teach(lang, "beginner", "gate-suppressed") == false)
 end
 
 -- more diff edge cases
@@ -314,10 +334,11 @@ local function gather(jobs, rounds)
   return results
 end
 
--- before = the function's signature stub, so the diff the model sees is its body
-local function suggest_job(before, after, ft)
+-- before = the function's signature stub, so the diff the model sees is its body.
+-- stage 1 (classify) is what the level/feature checks exercise.
+local function classify_job(before, after, ft)
   local change = diff.compute(before, after)
-  return change, change and function(cb) ai.suggestion(change, ft or "python", {}, cb) end or nil
+  return change, change and function(cb) ai.classify(change, ft or "python", cb) end or nil
 end
 
 -- two FRESHLY GENERATED "beginner" edits (novel code each run, via the keyless
@@ -327,26 +348,35 @@ end
 local generated = {}
 for i = 1, 2 do
   local fx = fixtures.fresh("beginner")
-  local change, job = suggest_job(fx.before, fx.after, fx.ft)
+  local change, job = classify_job(fx.before, fx.after, fx.ft)
   generated[i] = {
-    tag = "suggest[" .. fx.name .. (fx.generated and "" or "/FALLBACK") .. "]",
+    tag = "classify[" .. fx.name .. (fx.generated and "" or "/FALLBACK") .. "]",
     change = change,
     job = job,
   }
 end
 
 -- one concurrent batch: the generated-fixture classifications, the curated
--- per-level separation set, and the on-demand explain.
+-- per-level separation set, one stage-2 teach, and the on-demand explain.
 local jobs = {}
 for i, fx in ipairs(generated) do
   if fx.job then jobs["gen" .. i] = fx.job end
 end
 for _, lvl in ipairs(config.LEVELS) do
   for i, body in ipairs(fixtures.CURATED[lvl]) do
-    local _, job = suggest_job({ body[1], "    pass", }, body)
+    local _, job = classify_job({ body[1], "    pass", }, body)
     if job then jobs[lvl .. i] = job end
   end
 end
+
+-- stage 2 (teach) on a clear beginner miss: must return prose + a well-formed
+-- structured edit, with the corrected code kept OUT of the prose (dedup rule).
+local teach_change = diff.compute({ fixtures.CURATED.beginner[1][1], "    pass", },
+  fixtures.CURATED.beginner[1])
+if teach_change then
+  jobs.teach = function(cb) ai.teach(teach_change, "python", "the sum() builtin", cb) end
+end
+
 jobs.explain = function(cb) ai.explain("squares = [x * x for x in range(10)]", "python", cb) end
 
 local R = gather(jobs, 4)
@@ -357,14 +387,12 @@ for i, fx in ipairs(generated) do
   check(fx.tag .. ": fixture is a non-trivial edit", fx.change ~= nil)
   if fx.change then
     local s = R["gen" .. i]
-    check(fx.tag .. ": returns a suggestion", s ~= nil)
+    check(fx.tag .. ": returns a classification", s ~= nil)
     if s then
       check(fx.tag .. ": level is a known classification",
         type(s.level) == "string" and LEVEL_RANK[s.level] ~= nil, tostring(s.level))
       check(fx.tag .. ": feature is a non-empty string",
         type(s.feature) == "string" and #s.feature > 0, tostring(s.feature))
-      check(fx.tag .. ": any returned edit is well-formed",
-        s.edit == nil or utils.valid_edit(s.edit) ~= nil)
     end
   end
 end
@@ -400,6 +428,22 @@ do
   check("levels: classifications trend from beginner (low) to master (high)",
     all_scored and extremes_ordered and (avgs[hi] - avgs[lo]) >= 1.0,
     table.concat(detail, " "))
+end
+
+-- stage 2 (teach): prose + a structured edit, with the corrected code kept out
+-- of the prose. weak keyless models are noisy, so the no-fence rule is reported
+-- as INFO (the dedup PROBE in docs/cascade-refactor.md is the real verification).
+if teach_change then
+  local s = R.teach
+  check("teach: returns a non-empty explanation",
+    s ~= nil and type(s.summary) == "string" and #s.summary > 0)
+  if s then
+    check("teach: any returned edit is well-formed",
+      s.edit == nil or utils.valid_edit(s.edit) ~= nil)
+    local fenced = type(s.summary) == "string" and s.summary:find("```") ~= nil
+    print("INFO  teach dedup: explanation " .. (fenced and "CONTAINS" or "omits") ..
+      " a fenced code block")
+  end
 end
 
 -- explain answers about the *selected* code (distinctive construct -> named)
