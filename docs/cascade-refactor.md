@@ -52,31 +52,47 @@ experiments; kept for rationale and in case the pivot is reverted.
 Goal: cheap on the common path, robust for weak/free models, and the corrected
 code shown deterministically with no duplicated edit display.
 
-## Design — two-stage cascade
+## Design — two-stage cascade (stage 1 = the level detector)
 
-### Stage 1 — classify (runs on every non-trivial edit; cheap)
-- Input: the structured diff from `diff.compute` as JSON
-  (`{ before, after, start, filetype }`) — structured input is more reliable for
-  weak models than free prose.
-- Tool `classify` → `{ missing_language_feature: string, importance: integer 0-10 }`.
-  Small prompt/schema/output.
-- Importance stays 0–10 integer + `normalize_importance`.
+This is the post-pivot cascade: stage 1 is the **skill-level detector** from the
+2026-06-21 pivot (it returns a `level`, not a numeric `importance`), and the
+client gate is the per-language skill-level/suppression gate — no `eagerness`.
+
+### Stage 1 — classify / level detection (runs on every non-trivial edit; cheap)
+- Input: the structured diff from `diff.compute`
+  (region-before / region-after, anchored at `diff.start`) — structured input is
+  more reliable for weak models than free prose.
+- Tool `classify` → `{ feature: string, language: string, level: enum }`, where
+  `level` is `none` / `beginner` / `intermediate` / `advanced` / `master`
+  (mirrors `config.LEVELS`; `none` = already idiomatic, nothing to teach).
+- Small prompt/schema/output: it only names the missed feature and ranks how
+  obvious the miss is — it does NOT write the explanation or the edit. `level` is
+  coerced through `utils.normalize_level` (unknown degrades to the lowest level,
+  never silently `none`).
 
 ### Client-side gate (deterministic — no longer trusts the model)
-- normalize importance → `utils.meets_eagerness(importance)` (reused verbatim).
-- `store.is_suppressed(language, feature)` enforced **client-side** now: we just
-  don't fire stage 2 for a suppressed/dismissed feature, instead of asking the
-  model to honor a suppressed list. A robustness win, not just cost.
-- Only on pass do we proceed to stage 2.
+Centralised in `store.should_teach(language, level, feature)`, which is true only
+when **all** hold:
+- `level` is neither `nil` nor `"none"` (the model found something to teach),
+- `store.is_suppressed(language, feature)` is false — suppression of a
+  dismissed feature is now enforced **client-side**, so we simply don't fire
+  stage 2 for it, instead of trusting the model to honor a suppressed list,
+- `store.is_unlocked(language, level)` — the user has progressed to this level.
+
+Only on pass do we pay for stage 2. A gated-out edit costs just the cheap
+classify call.
 
 ### Stage 2 — teach (runs only past the gate; rare → heavy is affordable)
-- Input: same diff + the feature stage 1 named ("teach *specifically* X").
+- Input: same diff + the `feature` stage 1 named ("teach *specifically* X" —
+  keeps the two calls aligned).
 - Tool `suggest` → `{ explanation (prose), edit { start, final, content } }`.
+- `feature` / `language` / `level` are carried over from stage 1 (not re-asked).
 - Strict rule: `explanation` must NOT contain the corrected result as a fenced
   code block (we render it). DEDUP PROBE confirmed this rule alone suffices.
 
 Universal two-stage (not capability-gated): accept the extra round-trip latency
-on the *rare shown path* in exchange for cheap+robust on the common path.
+on the *rare shown path* in exchange for cheap+robust on the common path. The
+in-flight guard (`vim.b.learning_pending`) spans BOTH calls.
 
 ### Self-rendered red/green diff (window.lua + learning.lua)
 - Source of truth = the structured `edit`. At show-time the buffer still holds
@@ -166,13 +182,25 @@ Uncommitted (pending eagerness decision): the sharpened importance rubric
 (`ai.lua`), the category generator + curated set (`fixtures.lua`), the rewired
 live section (`run.lua`).
 
-## Remaining work
-1. Resolve the eagerness-check behavior (open decision above); get the suite green; commit rubric + tests.
-2. Stage split: `AI.classify` + `AI.teach` replacing `AI.suggestion`; structured-JSON stage-1 input; strict no-snippet rule in stage 2.
-3. `send_suggestion` orchestration: classify → client gate (`meets_eagerness` + `store.is_suppressed`) → teach → `Learning.show`; in-flight guard spans both calls.
-4. Self-rendered red/green diff in `window.lua` + a render helper.
-5. Tests alongside each piece (stubbed classify gate path, diff-render builder, etc.).
-6. Docs: update `tests/tests.md` (model-limitations + new fixtures), `README`.
+## Remaining work — STATUS
+
+The skill-level pivot (1) is DONE and merged to `main` (`0.2.1`). The cascade
+split itself is being built on branch `feat/cascade`:
+
+1. ~~Resolve the eagerness-check behavior~~ → SUPERSEDED by the skill-level
+   pivot; live tests assert level ordering, deterministic tests assert the gate.
+2. Stage split: `AI.classify` (level detector) + `AI.teach` replacing
+   `AI.suggestion`; structured stage-1 input; strict no-snippet rule in stage 2.
+3. `send_suggestion` orchestration: classify → client gate
+   (`store.should_teach` = level≠none/`is_suppressed`/`is_unlocked`) → teach →
+   `Learning.show`; the `learning_pending` guard spans both calls.
+4. Self-rendered red/green diff in `window.lua`: `Learning.show` reads the
+   pre-accept lines from the buffer (`before`) and the edit `content` (`after`)
+   and passes them to `window.show({ diff = { before, after } })`, rendered as
+   red/green lines (extmark `line_hl_group`) above the prose.
+5. Tests alongside each piece: deterministic `store.should_teach` gate matrix;
+   live classify (level) + teach (edit shape, dedup) + explain; smoke unchanged.
+6. Docs: update `tests/tests.md` (cascade + gate) and `README` (how-it-works).
 
 ## Constraints / gotchas
 - `custom_nvim_config/` and the user's `~/.config/nvim/.../ai.lua` hold real API
