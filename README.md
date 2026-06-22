@@ -89,6 +89,15 @@ provider = {
 > Some free "thinking" models reject a _forced_ tool call; learning.nvim falls
 > back to `tool_choice="auto"` automatically, so those models work too.
 
+### model strength matters
+
+The plugin leans on the model to (1) judge whether your edit really misses an
+idiomatic feature and (2) classify that miss into a skill level. **Stronger models
+do both far more reliably.** Weaker/free models still work, but tend to collapse
+the middle levels (everything reads as `beginner`) and occasionally miss a clear
+suggestion — so the skill-level progression feels coarser. If suggestions seem
+off or the levels never advance, try a more capable model before anything else.
+
 ## keymap example
 
 ```lua
