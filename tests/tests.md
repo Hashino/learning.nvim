@@ -88,13 +88,28 @@ tests/smoke.sh custom_nvim_config/init.lua   # faster personal provider
 
 It needs the `tui-use` CLI on `PATH`, runs in a small terminal to stay cheap,
 isolates dismissal state via `XDG_DATA_HOME`, prints `PASS`/`FAIL` per behaviour,
-and exits non-zero on any failure. In one session it covers:
+and exits non-zero on any failure.
+
+Two details keep it reliable on the flaky keyless model:
+
+- It **pre-unlocks every skill level** for the buffer's language (seeds
+  `progress.json` to `master`) so the gate never hides a suggestion — progression
+  itself is covered deterministically in `run.lua`, so the smoke test is free to
+  focus on the *plumbing*.
+- Its triggering edits are **genuine beginner misses** (slicing a whole list,
+  negative indexing), not idiomatic code — the model correctly returns "nothing
+  to teach" (`none`) for already-clean code, so only a real miss opens a window.
+  Each window-expecting step is **retried** with a fresh edit to ride out the
+  free model's per-call drop rate. The suppression step uses a feature the model
+  names consistently (`negative indexing`) so its dismiss counter doesn't split.
+
+In one session it covers:
 
 - startup with no fatal config error
 - `:Learning explain` with no selection → notifies
 - a trivial reindent → **no** window (edit detection)
-- a meaningful edit → a suggestion window opens
-- the dismissal cycle: same feature shows twice, then is suppressed at the threshold
+- a meaningful edit (a real miss) → a suggestion window opens
+- the dismissal cycle: the same feature shows twice, then is suppressed at the threshold
 - `:Learning explain` on a real visual selection → an explanation window opens
 - `:Learning disable` → no suggestions; `:Learning enable` → suggestions resume
 
