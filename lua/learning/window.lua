@@ -1,6 +1,9 @@
 local config = require("learning.config")
 
----@class learning.Window [Hashino/learning.nvim] floating suggestion window
+---@class learning.Window [Hashino/learning.nvim] floating window for suggestions,
+--- reminders, and the drill HUD. purely mechanical: the caller passes the content,
+--- the winbar hint, whether to focus it, and (for focused windows) the actions to
+--- bind — the *meaning* of each action stays in the core file.
 local Window = {
   win_id = nil,
 }
@@ -31,7 +34,7 @@ local function build_lines(summary, d)
   return lines, marks
 end
 
---- closes the suggestion window if it is open
+--- closes the window if it is open
 function Window.close()
   if Window.win_id and vim.api.nvim_win_is_valid(Window.win_id) then
     pcall(vim.api.nvim_win_close, Window.win_id, true)
@@ -39,16 +42,24 @@ function Window.close()
   Window.win_id = nil
 end
 
+---@class learning.Window.Action
+---@field key string keymap (lhs) bound on the float buffer
+---@field fn fun() runs when pressed (the window is closed first)
+---@field label string shown in the winbar hint
+
 ---@class learning.Window.Opts
 ---@field summary string markdown body to display
----@field diff? { before: string[], after: string[] } optional edit, shown as a red/green diff above the summary
----@field on_dismiss? fun() runs when the user dismisses, before the window closes
----@field on_accept? fun() runs when the user accepts; when nil the window is dismiss-only
+---@field diff? { before: string[], after: string[] } optional edit, shown as a red/green diff above the body
+---@field actions? learning.Window.Action[] keymaps bound on the (focused) float buffer; their labels build the winbar
+---@field winbar? string explicit winbar hint (for a passive HUD whose keys live elsewhere); overrides one built from actions
+---@field footer? string optional border footer (e.g. a progress bar)
+---@field focus? boolean enter the window (default true)
 
---- opens the floating suggestion window showing `summary` (and, when `diff` is
---- given, the red/green edit diff above it), wiring the dismiss (and, when
---- `on_accept` is given, the accept) keymaps and the matching winbar. only
---- handles the window: the meaning of dismiss/accept is the caller's.
+--- opens the floating window. with `actions`, each is bound as a normal-mode
+--- keymap on the float buffer (the window is closed *before* the action runs, so
+--- an action may open the next window) and the winbar lists them. with an explicit
+--- `winbar` and no actions it's a passive HUD — `focus = false` keeps the cursor
+--- in the code buffer and the caller binds the keys there.
 ---@param opts learning.Window.Opts
 function Window.show(opts)
   Window.close()
@@ -64,25 +75,29 @@ function Window.show(opts)
     vim.api.nvim_buf_set_extmark(buf, NS, m[1], 0, { line_hl_group = m[2], })
   end
 
-  vim.keymap.set("n", config.options.keys.dismiss, function()
-    if opts.on_dismiss then opts.on_dismiss() end
-    Window.close()
-  end, { buffer = buf, })
-
-  if opts.on_accept then
-    vim.keymap.set("n", config.options.keys.confirm, function()
-      opts.on_accept()
+  for _, a in ipairs(opts.actions or {}) do
+    vim.keymap.set("n", a.key, function()
       Window.close()
+      a.fn()
     end, { buffer = buf, })
   end
 
-  Window.win_id = vim.api.nvim_open_win(buf, true, config.options.win_config)
+  local focus = opts.focus ~= false
+  local win_config = config.options.win_config
+  if opts.footer then
+    win_config = vim.tbl_extend("force", win_config, { footer = opts.footer, footer_pos = "center", })
+  end
+  Window.win_id = vim.api.nvim_open_win(buf, focus, win_config)
 
-  local hint = opts.on_accept
-      and string.format(" [Learning] %s to accept | %s to dismiss",
-        config.options.keys.confirm, config.options.keys.dismiss)
-      or string.format(" [Learning] %s to dismiss", config.options.keys.dismiss)
-  vim.api.nvim_set_option_value("winbar", hint, { win = Window.win_id, })
+  local winbar = opts.winbar
+  if not winbar and opts.actions then
+    local parts = {}
+    for _, a in ipairs(opts.actions) do
+      table.insert(parts, a.key .. " " .. a.label)
+    end
+    winbar = " [Learning] " .. table.concat(parts, " | ")
+  end
+  vim.api.nvim_set_option_value("winbar", winbar or " [Learning]", { win = Window.win_id, })
 
   -- keep win_id accurate if the window is closed by other means
   vim.api.nvim_create_autocmd("WinClosed", {

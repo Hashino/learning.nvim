@@ -2,7 +2,39 @@
 
 Persistent record of the design + decisions + experiment findings for the
 two-stage AI cascade refactor of learning.nvim, so nothing is lost to session
-compaction. Status as of 2026-06-21, branch `main`.
+compaction. Status as of 2026-06-22, branch `feat/evaluate-cascade`.
+
+## PIVOT (2026-06-22) — `evaluate` cascade + knowledge-driven, inferred levels
+
+Built on branch `feat/evaluate-cascade`. Stage 1 `classify` is replaced by a
+single-tool **`evaluate`** returning BOTH `need_to_learn { feature, level }`
+(level `none` = nothing to teach) AND `already_knows [{ feature, level }]` (the
+features the changed lines demonstrate the user already uses).
+
+- **Levels collapsed to three** — `{ beginner, intermediate, advanced }`,
+  intermediate left broad (weak models separate extremes but blur fine grades; the
+  old `master` folds into `advanced`).
+- **Level is inferred, never configured.** Everyone starts `beginner`; promotion is
+  driven purely by demonstrated knowledge, replacing engagement-based
+  `record_interaction` (removed). `store.record_knowledge` bumps each demonstrated
+  feature's `used` count; a feature is "known" at `used >= know_threshold`; once the
+  user knows `unlock_threshold` distinct features of a tier the ceiling rises to the
+  next (`L+1`, capped, monotonic). Being taught/drilled is NOT proof — only the
+  evaluator seeing unprompted use counts.
+- **No knowledge-based suppression.** A feature you know but slip on still gets
+  taught (you don't miss what you truly know, so a knowledge gate would mostly fire
+  on slips — where a reminder helps — and on hallucinations, which would silently
+  and permanently deny a lesson). Only dismissal suppression remains.
+- **Gate unchanged** (`should_teach` = level≠none / not dismiss-suppressed /
+  is_unlocked); orchestration records knowledge first (so a same-edit miss can clear
+  the gate once the ceiling rises), then gates, then teaches.
+- **Tests:** deterministic promotion/gate matrix; live `evaluate` shape + tier
+  ordering; the non-deterministic output's relevance scored by an **AI judge**
+  (`fixtures.judge`, lenient), not brittle code asserts.
+
+This supersedes the engagement-based progression in the 2026-06-21 pivot below.
+Next stages (planned): active-recall drill loop, demonstration-routed reminders,
+and a progress UI.
 
 ## PIVOT (2026-06-21) — skill-level progression replaces numeric eagerness
 

@@ -35,11 +35,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# a suggestion/explain window is on screen iff its winbar ("... to dismiss") is.
-# this avoids matching the ":Learning ..." command echo in the cmdline.
-win_open() { tui-use find "to dismiss" 2>/dev/null | grep -q "Found"; }
+# a suggestion/explain window is on screen iff its winbar (which ends in "dismiss")
+# is. the drill HUD's winbar says "keep & stop" instead, so this matches only the
+# focused suggestion/explain windows — and never the ":Learning ..." cmdline echo.
+# (the drill's own keystrokes use <S-CR>/<C-g>, which terminals can't reliably
+# send, so the learn->drill path is covered deterministically in tests/run.lua.)
+win_open() { tui-use find "dismiss" 2>/dev/null | grep -q "Found"; }
 on_screen() { tui-use find "$1" 2>/dev/null | grep -q "Found"; }
-wait_win() { tui-use wait --text "to dismiss" "${1:-75000}" >/dev/null 2>&1; }
+wait_win() { tui-use wait --text "dismiss" "${1:-75000}" >/dev/null 2>&1; }
 settle() { tui-use wait "${1:-5000}" >/dev/null 2>&1; }
 dismiss() {
   tui-use press escape >/dev/null 2>&1
@@ -70,11 +73,11 @@ retry_win() { # <attempts> <printf-template-with-%d>
 rm -rf "$XDG_DATA_HOME"
 rm -f ~/.local/state/nvim/swap/*learning-smoke* 2>/dev/null
 
-# pre-unlock every skill level for python, so this PATH test exercises the
+# pre-unlock every skill tier for python, so this PATH test exercises the
 # keystroke -> window plumbing without the progressive gate hiding suggestions
 # (progression itself is covered deterministically in tests/run.lua).
 mkdir -p "$XDG_DATA_HOME/nvim/learning.nvim"
-printf '{"python":{"level":"master","engaged":0}}' \
+printf '{"python":{"level":"advanced","knows":{}}}' \
   >"$XDG_DATA_HOME/nvim/learning.nvim/progress.json"
 cat >"$SAMPLE" <<'PY'
 def total(numbers):

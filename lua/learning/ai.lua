@@ -193,23 +193,26 @@ local function make_ai_request(prompt, tools, tool_name, callback)
   attempt(1, "force")
 end
 
----@class learning.Classification stage-1 result: what feature the edit misses
----@field feature string short identifier of the missed language feature
----@field language string language the feature belongs to (the buffer filetype)
----@field level string skill level of the miss ("none" or one of config.LEVELS)
+---@class learning.Evaluation stage-1 result: what to teach + what's already known
+---@field need_to_learn { feature: string, level: string } the missed feature; level "none" = nothing to teach
+---@field already_knows { feature: string, level: string }[] features the changed lines show the user already uses
 
 ---@class learning.Suggestion stage-2 result shown to the user
 ---@field summary string explanation of the edit (markdown)
 ---@field feature? string short identifier of the language feature taught
 ---@field language? string language the feature belongs to (the buffer filetype)
 ---@field edit? learning.Edit edit to apply if the user accepts
----@field level? string skill level of the taught feature ("none" or one of config.LEVELS)
+---@field level? string skill level of the taught feature (one of config.LEVELS)
 ---@field track_dismiss? boolean when true, dismissing the window records a dismissal for (language, feature)
 
 ---@class learning.Edit
 ---@field start integer start line of the edit (0-indexed)
 ---@field final integer final line of the edit (0-indexed, exclusive)
 ---@field content string[] the content of the edit
+
+---@class learning.Example stage-2 drill example for one scaffold phase
+---@field explanation string short prose explanation of the feature
+---@field code string[] the fenced example lines
 
 -- the before/after region of an edit, the prompt fragment both stages share.
 ---@param diff learning.Diff
@@ -230,74 +233,121 @@ local function region_block(diff, filetype)
   })
 end
 
--- rubric for the stage-1 level, framed by how OBVIOUS the miss is (not how clever
--- the fix is). kept verbatim across runs so weak models get a stable anchor.
-local LEVEL_RUBRIC =
-  "Skill level of the missed feature, judged by how OBVIOUS the miss is — NOT " ..
-  "how clever the fix is. " ..
-  "\"none\" = the edited lines are already idiomatic, nothing to teach. " ..
-  "\"beginner\" = a clear beginner-level miss of a core builtin (manual accumulation " ..
-  "loop → sum, range(len(...)) indexing → enumerate, building strings with + → join, " ..
-  "append-loop → comprehension). " ..
-  "\"intermediate\" = a useful everyday idiom a beginner could easily miss " ..
-  "(enumerate/zip, dict.get, context managers, f-strings). " ..
-  "\"advanced\" = a non-obvious refinement that already-working code only marginally " ..
-  "benefits from (dropping brackets in `sum([...])`, `for k in d` vs `d.keys()`, " ..
-  "`not x` vs `len(x) == 0`, comprehension vs map/filter). " ..
-  "\"master\" = an expert-level construct most code never needs (generators over " ..
-  "lists for memory, __slots__, functools tricks). " ..
-  "Prefer \"none\" or \"advanced\" for already-working code; reserve \"beginner\" for obvious misses."
+-- the shared skill-tier taxonomy: which features belong to each tier, by how
+-- fundamental the feature is. used for BOTH evaluate fields — the tier of a
+-- missed feature and the tier of a demonstrated one. three tiers (intermediate
+-- left deliberately broad) because weak models separate the extremes reliably but
+-- blur finer gradations. kept verbatim across runs so the model gets a stable anchor.
+local LEVEL_TAXONOMY =
+  "\"beginner\" = a core builtin or basic idiom essentially every user needs " ..
+  "(manual accumulation loop → sum, range(len(...)) indexing → enumerate, " ..
+  "building strings with + → join, append-loop → list comprehension). " ..
+  "\"intermediate\" = the broad middle of everyday idioms a beginner could miss " ..
+  "(zip, dict.get, context managers, f-strings, comprehensions over map/filter, " ..
+  "`for k in d` vs `d.keys()`, `not x` vs `len(x) == 0`). " ..
+  "\"advanced\" = an expert construct most code never needs (generators for " ..
+  "memory, __slots__, functools/itertools tricks, metaclasses, descriptors)."
 
---- STAGE 1 (cheap, every non-trivial edit): names the single language feature
---- the edit misses and ranks how obvious the miss is. No explanation, no edit —
---- so the common, gated-out path stays small. The client gate
---- (`store.should_teach`) decides whether to pay for stage 2.
+--- STAGE 1 (cheap, every non-trivial edit): in one `evaluate` call, reports both
+--- the single feature the changed lines MISS (`need_to_learn`; level "none" when
+--- already idiomatic) and the features they DEMONSTRATE the user already uses
+--- (`already_knows`). The client records the knowledge — which is what advances
+--- the user's level — and pays for the heavy stage 2 only when there is something
+--- to teach at an unlocked level.
 ---@param diff learning.Diff
 ---@param filetype string filetype of the buffer being edited
----@param callback fun(classification: learning.Classification?)
-function AI.classify(diff, filetype, callback)
+---@param callback fun(evaluation: learning.Evaluation?)
+function AI.evaluate(diff, filetype, callback)
   local prompt = table.concat({
     "You are a language-learning assistant for " .. filetype .. ".\n" ..
-    "The user just made an edit. Identify a single " .. filetype .. " language " ..
-    "feature the changed lines MISS — an idiomatic improvement the edit could have " ..
-    "used — and classify how obvious that miss is.\n",
+    "The user just made an edit. Judging ONLY the changed lines, call the " ..
+    "`evaluate` tool with two things:\n" ..
+    "1. need_to_learn — the single most useful " .. filetype .. " feature the " ..
+    "changed lines MISS (an idiomatic improvement they could have used), and how " ..
+    "obvious the miss is. If the changed lines are already idiomatic, use level \"none\".\n" ..
+    "2. already_knows — the " .. filetype .. " features the changed lines " ..
+    "themselves DEMONSTRATE the user already uses correctly. List only " ..
+    "genuinely-demonstrated features; an empty list is correct and common.",
     region_block(diff, filetype),
-    "\nAnswer by calling the `classify` tool. If the changed lines are already " ..
-    "idiomatic (nothing worth teaching), use level \"none\". Be concise.",
+    "\nBe concise.",
   }, "\n")
 
   local anthropic = is_anthropic()
   local tools = {
-    make_tool(anthropic, "classify",
-      "Name the single language feature the edited lines miss and rank the miss.",
+    make_tool(anthropic, "evaluate",
+      "Report what the changed lines miss (need_to_learn) and what they show the " ..
+      "user already knows (already_knows).",
       {
-        feature = {
-          type = "string",
-          description = "Short lowercase identifier of the single missed feature, " ..
-            "e.g. 'list comprehension', 'pattern matching', 'string interpolation'.",
+        need_to_learn = {
+          type = "object",
+          description = "The single most useful feature the changed lines miss, " ..
+            "or level \"none\" if they are already idiomatic.",
+          properties = {
+            feature = {
+              type = "string",
+              description = "Short lowercase identifier of the missed feature, " ..
+                "e.g. 'list comprehension', 'string interpolation'. Empty if none.",
+            },
+            level = {
+              type = "string",
+              enum = { "none", "beginner", "intermediate", "advanced", },
+              description = "Skill tier of the MISSED feature, by how OBVIOUS the " ..
+                "miss is (not how clever the fix is). \"none\" = already idiomatic, " ..
+                "nothing to teach. " .. LEVEL_TAXONOMY,
+            },
+          },
+          required = { "feature", "level", },
         },
-        language = {
-          type = "string",
-          description = "The language the feature belongs to. Use exactly: " .. filetype,
-        },
-        level = {
-          type = "string",
-          enum = { "none", "beginner", "intermediate", "advanced", "master", },
-          description = LEVEL_RUBRIC,
+        already_knows = {
+          type = "array",
+          description = "Features the changed lines demonstrate the user already " ..
+            "uses correctly and idiomatically. Empty is correct and common — never " ..
+            "invent features the changed lines do not actually show.",
+          items = {
+            type = "object",
+            properties = {
+              feature = {
+                type = "string",
+                description = "Short lowercase identifier of a demonstrated feature.",
+              },
+              level = {
+                type = "string",
+                enum = { "beginner", "intermediate", "advanced", },
+                description = "Skill tier the demonstrated feature belongs to. " .. LEVEL_TAXONOMY,
+              },
+            },
+            required = { "feature", "level", },
+          },
         },
       },
-      { "feature", "language", "level", }),
+      { "need_to_learn", "already_knows", }),
   }
 
-  make_ai_request(prompt, tools, "classify", function(args)
-    if not args or not args.feature then
-      callback(nil)
-      return
+  make_ai_request(prompt, tools, "evaluate", function(args)
+    if type(args) ~= "table" then return callback(nil) end
+
+    -- need_to_learn — a missing/garbled object degrades to "nothing to teach"
+    local ntl = type(args.need_to_learn) == "table" and args.need_to_learn or {}
+    local feature = type(ntl.feature) == "string" and ntl.feature or ""
+    local level = utils.normalize_level(ntl.level)
+    if feature == "" then level = "none" end
+
+    -- already_knows — skip malformed items and any that normalize to "none"
+    local knows = {}
+    if type(args.already_knows) == "table" then
+      for _, item in ipairs(args.already_knows) do
+        if type(item) == "table" and type(item.feature) == "string" and item.feature ~= "" then
+          local lvl = utils.normalize_level(item.level)
+          if lvl ~= "none" then
+            table.insert(knows, { feature = item.feature, level = lvl, })
+          end
+        end
+      end
     end
+
     callback({
-      feature = args.feature,
-      language = args.language or filetype,
-      level = utils.normalize_level(args.level),
+      need_to_learn = { feature = feature, level = level, },
+      already_knows = knows,
     })
   end)
 end
@@ -358,6 +408,120 @@ function AI.teach(diff, filetype, feature, callback)
       summary = args.explanation,
       edit = args.edit,
     })
+  end)
+end
+
+--- (stage-2 drill) a cheap yes/no: did the learner's latest code correctly and
+--- idiomatically use `feature`? drives the teach-session state machine, fired
+--- only on an explicit submit (never polled) so it costs one small call per try.
+---@param code string the learner's current attempt
+---@param filetype string
+---@param feature string
+---@param callback fun(uses: boolean)
+function AI.verify(code, filetype, feature, callback)
+  local prompt = table.concat({
+    "You are a " .. filetype .. " tutor. The learner is practicing the feature \"" ..
+    feature .. "\". Judging the code below, did they use \"" .. feature ..
+    "\" correctly and idiomatically?",
+    "\n```" .. filetype .. "\n" .. code .. "\n```\n",
+    "Answer by calling the `verify` tool.",
+  }, "\n")
+
+  local anthropic = is_anthropic()
+  local tools = {
+    make_tool(anthropic, "verify",
+      "Report whether the code correctly uses the named feature.",
+      { uses = { type = "boolean", description = "true if the code uses the feature correctly", }, },
+      { "uses", }),
+  }
+
+  make_ai_request(prompt, tools, "verify", function(args)
+    callback(type(args) == "table" and args.uses == true)
+  end)
+end
+
+-- per-phase instruction for the drill example: analogous (a different context, so
+-- the learner can't just copy) → related (closer) → solution (the direct rewrite).
+local EXAMPLE_PHASE = {
+  analogous = "Show the feature used in a DIFFERENT, unrelated snippet (NOT the " ..
+    "learner's code), so they must work out how to apply it themselves.",
+  related = "Show the feature in a snippet CLOSER to the learner's code, but " ..
+    "still not the exact rewrite.",
+  solution = "Show the DIRECT idiomatic rewrite of the learner's own code.",
+}
+
+--- (stage-2 drill) the explanation + a fenced example for one scaffold phase.
+--- lazy: called per rung, tailored to the learner's current code, so each call
+--- stays small and only the rungs they actually reach are paid for.
+---@param feature string
+---@param filetype string
+---@param phase "analogous"|"related"|"solution"
+---@param code string the learner's code under practice
+---@param callback fun(example: learning.Example?)
+function AI.gen_example(feature, filetype, phase, code, callback)
+  local prompt = table.concat({
+    "You are a " .. filetype .. " tutor teaching the feature \"" .. feature .. "\".",
+    EXAMPLE_PHASE[phase] or EXAMPLE_PHASE.analogous,
+    "Also write a short explanation (at most two short paragraphs) of the feature.",
+    "\nThe learner's code:\n```" .. filetype .. "\n" .. code .. "\n```\n",
+    "Answer by calling the `example` tool.",
+  }, "\n")
+
+  local anthropic = is_anthropic()
+  local tools = {
+    make_tool(anthropic, "example",
+      "Provide a short explanation and a fenced example of the feature.",
+      {
+        explanation = { type = "string", description = "at most two short paragraphs", },
+        code = { type = "array", items = { type = "string", }, description = "the example, one string per line", },
+      },
+      { "explanation", "code", }),
+  }
+
+  make_ai_request(prompt, tools, "example", function(args)
+    if type(args) ~= "table" or type(args.explanation) ~= "string" then
+      callback(nil)
+      return
+    end
+    callback({
+      explanation = args.explanation,
+      code = type(args.code) == "table" and args.code or {},
+    })
+  end)
+end
+
+--- (stage-2 reminder) the user already KNOWS `feature` but slipped here. writes a
+--- short, friendly nudge; a fenced snippet IS allowed (it's a memory jog — the
+--- inverse of teach's no-snippet rule, since there is no drill to spoil).
+---@param diff learning.Diff
+---@param filetype string
+---@param feature string
+---@param callback fun(reminder: learning.Suggestion?)
+function AI.remind(diff, filetype, feature, callback)
+  local prompt = table.concat({
+    "You are a " .. filetype .. " tutor. The learner already knows the feature \"" ..
+    feature .. "\" but didn't use it in this edit. Write a SHORT, friendly reminder " ..
+    "(2-3 sentences), opening with something like \"Remember `" .. feature ..
+    "`?\", and include a small fenced code block showing how it applies to the " ..
+    "changed lines.",
+    region_block(diff, filetype),
+    "\nAnswer by calling the `remind` tool.",
+  }, "\n")
+
+  local anthropic = is_anthropic()
+  local tools = {
+    make_tool(anthropic, "remind",
+      "Write a short reminder (one fenced snippet is allowed here).",
+      { reminder = { type = "string", description = "2-3 sentence reminder, may include one fenced snippet", }, },
+      { "reminder", }),
+  }
+
+  make_ai_request(prompt, tools, "remind", function(args)
+    if type(args) ~= "table" or type(args.reminder) ~= "string" then
+      callback(nil)
+      return
+    end
+    callback({ summary = args.reminder, })
   end)
 end
 

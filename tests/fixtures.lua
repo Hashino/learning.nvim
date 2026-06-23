@@ -147,11 +147,11 @@ function Fixtures.fresh(category)
 end
 
 -- hand-curated clean fixtures (each the `after` function body), grouped by the
--- skill level the missed feature belongs to. they anchor the live classification
--- test: the model should rank these roughly in this order (beginner lowest,
--- master highest). the free generator can't reliably produce the higher levels
--- (it tends to emit obvious misses), so these are fixed and ordering-verified.
--- Levels mirror learning.config.LEVELS.
+-- tier the missed feature belongs to. they anchor the live evaluate test: the
+-- model should rank these roughly beginner (lowest) → advanced/idiomatic
+-- (highest). the free generator can't reliably produce the higher tiers (it tends
+-- to emit obvious misses), so these are fixed and ordering-verified. Tiers mirror
+-- learning.config.LEVELS.
 Fixtures.CURATED = {
   -- a clear miss of a core builtin
   beginner = {
@@ -163,16 +163,33 @@ Fixtures.CURATED = {
     { "def pairs(a, b):", "    for i in range(len(a)):", "        print(a[i], b[i])", },
     { "def get_or_none(d, k):", "    if k in d:", "        return d[k]", "    return None", },
   },
-  -- a non-obvious refinement of already-working code
+  -- a high-tier refinement or already-idiomatic code, so the model ranks it high
+  -- (either "advanced" or "none")
   advanced = {
     { "def sq_sum(xs):", "    return sum([x * x for x in xs])", },
-    { "def is_empty(xs):", "    if len(xs) == 0:", "        return True", "    return False", },
-  },
-  -- an expert-level construct most code never needs
-  master = {
-    { "def squares_sum(xs):", "    squares = [x * x for x in xs]", "    return sum(squares)", },
-    { "def first_even(xs):", "    for x in xs:", "        if x % 2 == 0:", "            return x", "    return None", },
+    { "def squares(xs):", "    return [x * x for x in xs]", },
   },
 }
+
+--- a coarse AI yes/no judge (keyless free model) for relevance/accuracy checks
+--- whose answers are inherently non-deterministic. lenient by design; nil when
+--- the judge can't be reached.
+---@param question string a yes/no question
+---@return boolean?
+function Fixtures.judge(question)
+  local args = request(
+    question .. "\nAnswer by calling `verdict` with a boolean.",
+    { type = "function", ["function"] = {
+      name = "verdict",
+      description = "Return the yes/no verdict.",
+      parameters = {
+        type = "object",
+        properties = { yes = { type = "boolean", description = "true for yes", }, },
+        required = { "yes", },
+      },
+    }, })
+  if type(args) ~= "table" or type(args.yes) ~= "boolean" then return nil end
+  return args.yes
+end
 
 return Fixtures

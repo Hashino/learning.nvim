@@ -19,6 +19,7 @@ larn the language features naturally as you code
 ## commands
 
 - `:Learning explain` explains the visually selected code using AI
+- `:Learning progress` shows your tier and learned features per language
 - `:Learning disable` disables the plugin
 - `:Learning enable` enables the plugin
 - `:Learning toggle` toggles the plugin on and off
@@ -39,7 +40,8 @@ lazy.nvim:
 {
   "Hashino/learning.nvim",
   opts = {
-      unlock_threshold = 5, -- suggestions to engage with at your current skill level before the next one unlocks
+      unlock_threshold = 3, -- distinct features to demonstrate at your tier before the next unlocks
+      know_threshold = 3, -- times you must use a feature before it counts as "known"
       debounce_ms = 250, -- debounce interval in ms before sending accumulated edits
       dismiss_threshold = 2, -- dismissals of a feature before its suggestions are suppressed
       ignored_buffers = { ".gitignore", ".git/COMMIT_EDITMSG" }, -- buffers to skip. string array or fun():string[], matched against filetype/filename/filepath
@@ -57,7 +59,8 @@ vim.pack:
 ```lua
 vim.pack.add({ "https://github.com/Hashino/learning.nvim", })
 require("learning").setup({
-  unlock_threshold = 5, -- suggestions to engage with at your current skill level before the next one unlocks
+  unlock_threshold = 3, -- distinct features to demonstrate at your tier before the next unlocks
+  know_threshold = 3, -- times you must use a feature before it counts as "known"
   debounce_ms = 250, -- debounce interval in ms before sending accumulated edits
   ignored_buffers = { ".gitignore", ".git/COMMIT_EDITMSG" }, -- buffers to skip. string array or fun():string[], matched against filetype/filename/filepath
 
@@ -92,11 +95,12 @@ provider = {
 ### model strength matters
 
 The plugin leans on the model to (1) judge whether your edit really misses an
-idiomatic feature and (2) classify that miss into a skill level. **Stronger models
-do both far more reliably.** Weaker/free models still work, but tend to collapse
-the middle levels (everything reads as `beginner`) and occasionally miss a clear
-suggestion — so the skill-level progression feels coarser. If suggestions seem
-off or the levels never advance, try a more capable model before anything else.
+idiomatic feature, (2) place that miss in a skill tier, and (3) recognise the
+features your code already uses well (which is what advances you). **Stronger
+models do all three far more reliably.** Weaker/free models still work, but tend
+to blur `beginner` and `intermediate` and occasionally miss a clear suggestion —
+so progression feels coarser. If suggestions seem off or your level never
+advances, try a more capable model before anything else.
 
 ## keymap example
 
@@ -108,13 +112,13 @@ vim.keymap.set("v", "<leader>le", require("learning").explain, { desc = "[E]xp[l
 
 After each edit, the plugin snapshots the buffer and computes a diff to detect what changed. After a configurable debounce period of inactivity (`debounce_ms`), the changed lines (with surrounding context) run through a two-stage cascade:
 
-1. **classify** (cheap, every edit) — the model names the single language feature the change misses and ranks how obvious the miss is (`none` / `beginner` / `intermediate` / `advanced` / `master`).
-2. a deterministic gate decides whether it's worth teaching: the feature must not be already-idiomatic (`none`), not [suppressed](#suppressing-repeated-suggestions), and at a skill level you've unlocked.
+1. **evaluate** (cheap, every edit) — in one call the model reports *both* the single feature the change MISSES (`need_to_learn`, ranked `none` / `beginner` / `intermediate` / `advanced`) and the features the change DEMONSTRATES you already use well (`already_knows`). The demonstrated features are recorded — this is what advances your level.
+2. a deterministic gate decides whether the miss is worth teaching: it must not be already-idiomatic (`none`), not [suppressed](#suppressing-repeated-suggestions), and at a skill tier you've reached.
 3. **teach** (only when the gate passes) — the model writes the tip and the concrete idiomatic rewrite.
 
-Most edits stop at stage 1, so the common path is a single small request. When a suggestion does fire, it's shown in a floating window with the rewrite as a red/green diff above the explanation — press `keys.confirm` to accept the edit or `keys.dismiss` to dismiss.
+Most edits stop at stage 1, so the common path is a single small request. When a suggestion does fire, it's shown in a floating window with the explanation — press `keys.suggestion.learn` to enter a short **learn-mode drill**, or `keys.suggestion.dismiss` to dismiss (dismissing the same feature `dismiss_threshold` times suppresses it). In a drill the relevant lines are commented out as a reference and you reimplement them yourself; you `submit` your attempt to be checked, and worked examples are revealed if you get stuck (`give_up` restores your original code, `dismiss` keeps what you wrote). You learn by *doing*, not by accepting a fix. If you slip on a feature you've already demonstrated you know, you get a gentle **reminder** instead of a full lesson.
 
-Suggestions are revealed in pedagogical order: you start seeing only `beginner` tips, and each time you engage with `unlock_threshold` suggestions (accepting *or* dismissing) at your current top level, the next level unlocks. Progress is tracked **per language** in `~/.local/share/nvim/learning.nvim/progress.json` — so you can be a Python beginner and a Rust master at once. Delete that file to reset.
+Your skill level is **inferred, never configured**: everyone starts at `beginner` and is promoted as the model sees you use features correctly — once you've demonstrated `unlock_threshold` distinct features of your current tier (each used at least `know_threshold` times) the next tier unlocks. Suggestions are therefore revealed in pedagogical order, and an already-skilled user simply climbs quickly as they write idiomatic code (it can take a little while for the plugin to calibrate to your true level). Progress is tracked **per language** in `~/.local/share/nvim/learning.nvim/progress.json` — so you can be a Python beginner and a Rust expert at once. Delete that file to reset. Suggestions show a mastery bar in their footer, and `:Learning progress` opens a full view of your tier and the features you've learned in each language.
 
 > **Breaking change:** the old `eagerness` option has been replaced by this
 > automatic skill-level progression. If you still pass `eagerness`, it is ignored
@@ -131,9 +135,11 @@ Suggestions are revealed in pedagogical order: you start seeing only `beginner` 
 
 ```lua
 require("learning").setup({
-  -- how many suggestions you engage with (accept or dismiss) at your current top
-  -- skill level before the next level unlocks. lower = level up faster.
-  unlock_threshold = 5,
+  -- distinct features you must demonstrate at your current tier before the next
+  -- unlocks (a feature counts once you've used it `know_threshold` times). your
+  -- level is inferred from what you write — it is never set directly.
+  unlock_threshold = 3,
+  know_threshold = 3,
 
   -- debounce interval in ms before sending accumulated edits
   debounce_ms = 250,
@@ -152,10 +158,18 @@ require("learning").setup({
     model = "",   -- the model you want to use, should be specified in the docs of your provider
   },
 
-  -- keymaps for the suggestion window
+  -- keymaps, grouped by window: a suggestion/reminder, and a learn-mode drill
   keys = {
-    confirm = "<S-CR>", -- accept the suggested edit
-    dismiss = "<Esc>",  -- dismiss the suggestion
+    suggestion = {
+      learn = "<S-CR>",  -- enter a learn-mode drill for the feature
+      dismiss = "<Esc>", -- dismiss the suggestion
+    },
+    -- during a drill you edit the code buffer itself, so avoid <Esc> here
+    drilling = {
+      submit = "<S-CR>",  -- check your attempt
+      give_up = "<C-g>",  -- restore your original code and stop
+      dismiss = "<C-x>",  -- keep what you wrote and stop
+    },
   },
 
   -- window config for the suggestion window

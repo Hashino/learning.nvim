@@ -124,4 +124,14 @@ function Utils.normalize_level(raw)
   return config.LEVELS[1]
 end
 
+--- a unicode progress bar: `width` cells, a `fraction` (0..1) of them filled.
+---@param fraction number
+---@param width integer
+---@return string
+function Utils.bar(fraction, width)
+  fraction = math.max(0, math.min(1, fraction or 0))
+  local filled = math.floor(fraction * width + 0.5)
+  return string.rep("▰", filled) .. string.rep("▱", width - filled)
+end
+
 return Utils

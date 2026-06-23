@@ -34,32 +34,48 @@ the progression probes start from the lowest level.
   deletions never suggest; a top-of-file insertion stays localized to the changed
   line instead of flagging the whole file.
 - **Edit validation** — malformed model edits are rejected before being applied.
-- **Window policy** — accepting applies the edit to the buffer; a tracked dismiss
-  records toward suppression; an untracked dismiss and an explain-style dismiss do
-  **not** record.
+- **Window policy** — a suggestion offers learn + dismiss (no direct apply);
+  dismissing a suggestion/reminder records toward suppression; an explain-style
+  window records nothing.
+- **Teach-session state machine** (deterministic) — the pure drill reducer
+  escalates the scaffold (analogous → related → solution) on failed submits with
+  no failure cap, masters on a correct one, and exits cleanly on give_up/dismiss.
+- **Learn-mode drill flow** (deterministic, AI stubbed) — a suggestion's `learn`
+  comments the target lines and opens a drill; a wrong submit keeps it active, a
+  correct one ends it; give_up restores the buffer.
 - **Dismissal suppression** — a feature is suppressed once it reaches
   `dismiss_threshold`.
-- **Skill-level gate + progression** (deterministic) — a language starts at
-  `beginner`; only levels at/below the unlocked one show; engaging with
-  `unlock_threshold` suggestions *at the current top level* unlocks the next one
-  (and only top-level engagement counts); progress is per-language and persists
-  across reloads, capped at `master`.
+- **Skill-level gate + knowledge progression** (deterministic) — a language starts
+  at `beginner` (the level is inferred, never configured); only tiers at/below the
+  unlocked one show; a feature is "known" after `know_threshold` demonstrations,
+  and knowing `unlock_threshold` distinct features of a tier promotes to the next
+  (capped); promotion comes from demonstrated knowledge only, not from engaging
+  with suggestions; progress is per-language and persists across reloads.
 - **Cascade gate** (deterministic) — `store.should_teach` pays for stage 2 only
-  when the classification is teachable: level is neither `nil` nor `none`, the
-  feature isn't suppressed, and its level is unlocked. All branches are pure.
+  when the miss is teachable: level is neither `nil` nor `none`, the feature isn't
+  suppressed, and its tier is unlocked. All branches are pure. (There is no
+  knowledge-based suppression — a feature you know but slip on still gets taught.)
 - **Explain, no selection** — `Learning.explain()` with nothing selected notifies
   and opens no window.
-- **Stage 1, classify (live)** — on freshly generated misses, returns a known
-  skill `level` and a non-empty `feature`.
+- **Stage 1, evaluate (live)** — on freshly generated misses, returns an
+  evaluation: a `need_to_learn` with a known tier and an `already_knows` list.
+- **Evaluate relevance (live, AI-judged)** — a model (not code) judges whether the
+  named `need_to_learn` feature is a relevant improvement for the curated beginner
+  misses; a lenient majority must agree. Printed as `INFO  evaluate relevance ...`.
 - **Stage 2, teach (live)** — on a clear beginner miss, returns a non-empty prose
   explanation and a well-formed structured edit; whether the prose leaked a fenced
   code block (the dedup rule) is printed as `INFO  teach dedup: ...`.
-- **Level ordering (live)** — curated fixtures grouped by level
-  (`fixtures.CURATED`) classify (stage 1) in roughly increasing order: the
-  `beginner` cluster lands lowest, `master` highest, with the middles in between.
-  Printed as `INFO  level classification: ...` every run.
+- **Tier ordering (live)** — curated fixtures grouped by tier (`fixtures.CURATED`)
+  evaluate (stage 1) in roughly increasing order: the `beginner` cluster lands
+  lowest, `advanced` highest, with `intermediate` in between. Printed as
+  `INFO  level classification: ...` every run.
 - **Explain, relevance** — explaining a distinctive construct names it (a list
   comprehension → "comprehension").
+- **Drill primitives (live)** — `verify` recognizes a clear use of a feature;
+  `gen_example` returns an explanation plus a fenced example.
+- **Progress helpers** (deterministic) — `utils.bar` renders a filled/empty bar;
+  `store.progress_summary` reports the tier, known features, and how many sit at
+  the current tier; `store.languages` lists tracked languages.
 
 ### Why an *ordering* check, and why three runs
 
@@ -98,10 +114,10 @@ and exits non-zero on any failure.
 
 Two details keep it reliable on the flaky keyless model:
 
-- It **pre-unlocks every skill level** for the buffer's language (seeds
-  `progress.json` to `master`) so the gate never hides a suggestion — progression
-  itself is covered deterministically in `run.lua`, so the smoke test is free to
-  focus on the *plumbing*.
+- It **pre-unlocks every skill tier** for the buffer's language (seeds
+  `progress.json` to `advanced`) so the gate never hides a suggestion —
+  progression itself is covered deterministically in `run.lua`, so the smoke test
+  is free to focus on the *plumbing*.
 - Its triggering edits are **genuine beginner misses** (slicing a whole list,
   negative indexing), not idiomatic code — the model correctly returns "nothing
   to teach" (`none`) for already-clean code, so only a real miss opens a window.

@@ -4,6 +4,7 @@ local store  = require("learning.store")
 local diff   = require("learning.diff")
 local utils  = require("learning.utils")
 local window = require("learning.window")
+local drill  = require("learning.drill")
 
 local Learning = {
   enabled = true,
@@ -26,6 +27,15 @@ function Learning.setup(opts)
   if opts and opts.eagerness ~= nil then -- intentionally not in learning.Config
     vim.deprecate("require('learning').setup({ eagerness })",
       "automatic skill-level progression (remove the option; tune `unlock_threshold` instead)",
+      "a future release", "learning.nvim", false)
+  end
+
+  -- the flat `keys.confirm/dismiss` became grouped keys (suggestion vs drilling)
+  -- when the active-recall drill landed; warn rather than silently ignore them.
+  ---@diagnostic disable-next-line: undefined-field
+  if opts and opts.keys and (opts.keys.confirm ~= nil or opts.keys.dismiss ~= nil) then
+    vim.deprecate("require('learning').setup({ keys = { confirm/dismiss } })",
+      "grouped keys.suggestion.{learn,dismiss} and keys.drilling.{submit,give_up,dismiss}",
       "a future release", "learning.nvim", false)
   end
 
@@ -64,59 +74,88 @@ function Learning.setup(opts)
   })
 end
 
---- shows the suggestion in a floating window, deciding what dismiss and accept
---- mean: dismissing an auto-suggestion may record a dismissal toward
---- suppression, and accepting a (valid) edit applies it to `toedit`.
----@param toedit integer buffer to apply the edit to
----@param suggestion learning.Suggestion
-function Learning.show(toedit, suggestion)
-  if not suggestion or not suggestion.summary then return end
+--- builds the action list for a focused suggestion/reminder window: an optional
+--- learn/re-learn action (opens a drill) followed by dismiss. read live so a
+--- `setup` keymap change is honored.
+---@param on_learn? fun() runs the learn/re-learn action; omit for dismiss-only
+---@param learn_label? string winbar label for that action ("learn" / "re-learn")
+---@param on_dismiss fun() runs on dismiss
+---@return learning.Window.Action[]
+local function suggestion_actions(on_learn, learn_label, on_dismiss)
+  local k = config.options.keys.suggestion
+  local actions = { { key = k.dismiss, fn = on_dismiss, label = "dismiss", }, }
+  if on_learn then
+    table.insert(actions, 1, { key = k.learn, fn = on_learn, label = learn_label, })
+  end
+  return actions
+end
 
-  -- only offer "accept" when the model returned a well-formed replacement
+--- the user's progress toward mastery (the top tier) in a language, as 0..1.
+---@param p table a `store.progress_summary` result
+---@return number
+local function mastery_fraction(p)
+  if p.at_max then return 1 end
+  return ((p.level_index - 1) + math.min(p.known_at_tier / p.threshold, 1)) / (#config.LEVELS - 1)
+end
+
+--- a compact progress bar toward mastering `language`, for a window footer.
+---@param language string
+---@return string
+local function progress_footer(language)
+  local p = store.progress_summary(language)
+  return string.format(" %s %s ", p.level, utils.bar(mastery_fraction(p), 12))
+end
+
+--- shows a teach suggestion: the explanation only — the rewrite is *withheld* so
+--- the learner reconstructs it in a drill. `learn` opens the drill on the feature;
+--- `dismiss` records a dismissal toward suppression. with no usable edit to anchor
+--- a drill it degrades to a dismiss-only note.
+---@param buf integer
+---@param filetype string
+---@param feature string
+---@param suggestion learning.Suggestion
+function Learning.show_suggestion(buf, filetype, feature, suggestion)
+  if not suggestion or not suggestion.summary then return end
   local edit = utils.valid_edit(suggestion.edit)
 
-  -- a valid edit is shown as a red/green diff: the lines it would replace (still
-  -- in the buffer at show-time) are "before", its content is "after". this makes
-  -- the correction explicit, so the prose explanation never has to repeat it.
-  local diff_view
-  if edit and vim.api.nvim_buf_is_valid(toedit) and vim.api.nvim_buf_is_loaded(toedit) then
-    diff_view = {
-      before = vim.api.nvim_buf_get_lines(toedit, edit.start, edit.final, false),
-      after = edit.content,
-    }
-  end
-
-  -- engaging with an auto-suggestion (either accepting or dismissing it) counts
-  -- toward unlocking the next skill level for this language.
-  local function record_engagement()
-    if suggestion.track_dismiss then
-      store.record_interaction(suggestion.language, suggestion.level)
-    end
-  end
+  local function on_dismiss() store.record_dismiss(filetype, feature) end
+  local on_learn = edit and function()
+    drill.start(buf, { feature = feature, edit = edit, filetype = filetype, })
+  end or nil
 
   window.show({
     summary = suggestion.summary,
-    diff = diff_view,
-    on_dismiss = function()
-      record_engagement()
-      -- only explicit dismissals of auto-suggestions count toward suppression;
-      -- accepting an edit or replacing the window does not.
-      if suggestion.track_dismiss then
-        store.record_dismiss(suggestion.language, suggestion.feature)
-      end
-    end,
-    on_accept = edit and function()
-      record_engagement()
-      -- guard against out-of-range indices from a malformed model edit
-      local ok = pcall(vim.api.nvim_buf_set_lines, toedit, edit.start, edit.final, false, edit.content)
-      if ok and vim.api.nvim_buf_is_valid(toedit) and vim.api.nvim_buf_is_loaded(toedit) then
-        vim.b[toedit].learning_old = vim.api.nvim_buf_get_lines(toedit, 0, -1, false)
-      end
-    end or nil,
+    actions = suggestion_actions(on_learn, "learn", on_dismiss),
+    footer = progress_footer(filetype),
   })
 end
 
---- explains the current visual selection on demand (`:Learning explain`)
+--- shows a reminder for a feature the user already knows but slipped on: a short
+--- nudge (a fenced snippet is fine here). `re-learn` re-runs teach and drops into a
+--- drill; `dismiss` records a dismissal.
+---@param buf integer
+---@param change learning.Diff
+---@param filetype string
+---@param feature string
+---@param text string
+function Learning.show_reminder(buf, change, filetype, feature, text)
+  local function on_dismiss() store.record_dismiss(filetype, feature) end
+  local function on_relearn()
+    ai.teach(change, filetype, feature, function(suggestion)
+      local edit = suggestion and utils.valid_edit(suggestion.edit)
+      if edit then drill.start(buf, { feature = feature, edit = edit, filetype = filetype, }) end
+    end)
+  end
+
+  window.show({
+    summary = text,
+    actions = suggestion_actions(on_relearn, "re-learn", on_dismiss),
+    footer = progress_footer(filetype),
+  })
+end
+
+--- explains the current visual selection on demand (`:Learning explain`). a plain,
+--- dismiss-only note — no drill, no dismissal recorded.
 function Learning.explain()
   local buf = vim.api.nvim_get_current_buf()
   if not (vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)) then return end
@@ -128,8 +167,57 @@ function Learning.explain()
   end
 
   ai.explain(table.concat(lines, "\n"), vim.bo[buf].filetype, function(suggestion)
-    if suggestion then Learning.show(buf, suggestion) end
+    if not (suggestion and suggestion.summary) then return end
+    window.show({
+      summary = suggestion.summary,
+      actions = suggestion_actions(nil, nil, function() end),
+    })
   end)
+end
+
+--- shows the user's learning progress (`:Learning progress`): the current buffer's
+--- language first — its tier, a mastery bar, and the features learned in it — then
+--- a bar for every other language touched.
+function Learning.progress()
+  local current = vim.bo[vim.api.nvim_get_current_buf()].filetype
+  local lines = {}
+
+  local function block(lang, detailed)
+    local p = store.progress_summary(lang)
+    table.insert(lines, string.format("%s  %-12s %s", utils.bar(mastery_fraction(p), 16), p.level, lang))
+    if not detailed then return end
+    if p.at_max then
+      table.insert(lines, "  mastered — keep using advanced features")
+    else
+      table.insert(lines, string.format("  %d/%d features known toward %s",
+        p.known_at_tier, p.threshold, config.LEVELS[p.level_index + 1]))
+    end
+    for _, k in ipairs(p.known) do
+      table.insert(lines, string.format("    • %s (%s)", k.feature, k.level))
+    end
+  end
+
+  if current ~= "" then
+    table.insert(lines, "# " .. current)
+    block(current, true)
+    table.insert(lines, "")
+  end
+
+  local others = {}
+  for _, lang in ipairs(store.languages()) do
+    if lang ~= current then table.insert(others, lang) end
+  end
+  if #others > 0 then
+    table.insert(lines, "# other languages")
+    for _, lang in ipairs(others) do block(lang, false) end
+  end
+
+  if #lines == 0 then lines = { "no progress recorded yet — start coding!", } end
+
+  window.show({
+    summary = table.concat(lines, "\n"),
+    actions = suggestion_actions(nil, nil, function() end),
+  })
 end
 
 function Learning.enable()
@@ -147,10 +235,11 @@ end
 -- auto-suggestion pipeline, driven by the autocmds registered in `setup`
 
 --- diffs the current buffer against its last snapshot and runs the two-stage
---- cascade: a cheap stage-1 `classify` on every edit, then — only when the
---- deterministic gate (`store.should_teach`) passes — the heavier stage-2
---- `teach` that produces the shown suggestion. The `learning_pending` guard
---- spans both calls so the gated-out common path stays a single small request.
+--- cascade: a cheap stage-1 `evaluate` on every edit — which both records what the
+--- edit shows the user already knows (advancing their inferred level) and names
+--- what it misses — then, only when the deterministic gate (`store.should_teach`)
+--- passes, the heavier stage-2 `teach` that produces the shown suggestion. The
+--- `learning_pending` guard spans both calls so the gated-out path stays small.
 local function send_suggestion()
   if not Learning.enabled or not utils.should_suggest() then return end
 
@@ -159,6 +248,9 @@ local function send_suggestion()
 
   -- one request at a time per buffer, to avoid stacking overlapping popups
   if vim.b.learning_pending then return end
+
+  -- stand down entirely while a drill is open for this buffer
+  if drill.active(buf) then return end
 
   vim.b.learning_new = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
   if vim.b.learning_old == nil then
@@ -180,23 +272,34 @@ local function send_suggestion()
     end
   end
 
-  ai.classify(change, filetype, function(classification)
-    if not classification then return settle() end
-    local language = classification.language
+  ai.evaluate(change, filetype, function(evaluation)
+    if not evaluation then return settle() end
+
+    -- record what the edit DEMONSTRATED first: this may raise the user's level
+    -- enough that a feature missed in the SAME edit now clears the gate.
+    store.record_knowledge(filetype, evaluation.already_knows)
+
     -- deterministic gate: skip stage 2 for nothing-to-teach / suppressed / locked
-    if not store.should_teach(language, classification.level, classification.feature) then
+    local need = evaluation.need_to_learn
+    if not store.should_teach(filetype, need.level, need.feature) then
       return settle()
     end
 
-    ai.teach(change, filetype, classification.feature, function(suggestion)
-      settle()
-      if not suggestion then return end
-      suggestion.feature = classification.feature
-      suggestion.language = language
-      suggestion.level = classification.level
-      suggestion.track_dismiss = true
-      Learning.show(buf, suggestion)
-    end)
+    -- a feature the user has demonstrably known (used >= know_threshold times) is a
+    -- slip, not a gap: nudge with a reminder. otherwise teach it and offer a drill.
+    if store.is_known(filetype, need.feature) then
+      ai.remind(change, filetype, need.feature, function(reminder)
+        settle()
+        if reminder then
+          Learning.show_reminder(buf, change, filetype, need.feature, reminder.summary)
+        end
+      end)
+    else
+      ai.teach(change, filetype, need.feature, function(suggestion)
+        settle()
+        if suggestion then Learning.show_suggestion(buf, filetype, need.feature, suggestion) end
+      end)
+    end
   end)
 end
 
