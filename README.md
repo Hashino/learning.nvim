@@ -12,9 +12,7 @@
 
 larn the language features naturally as you code
 
-![demo1](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo1.gif)
-
-![demo2](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo2.gif)
+![demo](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo/demo.gif)
 
 ## commands
 
