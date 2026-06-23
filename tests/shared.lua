@@ -11,7 +11,10 @@ return function(overrides)
   vim.opt.number = true
   vim.opt.relativenumber = false
 
-  vim.opt.rtp:append("/home/hashino/.local/share/nvim/site/pack/core/opt/learning.nvim")
+  -- plugin root = the parent of this file's directory (…/tests/shared.lua),
+  -- so the suite works from any checkout / cwd
+  local plugin_root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
+  vim.opt.rtp:append(plugin_root)
 
   require("learning").setup(vim.tbl_deep_extend("force", {
     -- unlock_threshold left at its default; the runner drives progression
