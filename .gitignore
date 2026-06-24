@@ -2,3 +2,11 @@ custom_nvim_config/
 
 # transient VHS recording artifact (record.sh converts it to demo.gif)
 demo/demo.mp4
+
+# explain-only quality-check artifacts (not the real demo — see explain-test.tape)
+demo/explain-test.mp4
+demo/explain-test.gif
+
+# drill-only quality-check artifacts (not the real demo — see drill-test.tape)
+demo/drill-test.mp4
+demo/drill-test.gif

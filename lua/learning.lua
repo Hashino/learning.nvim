@@ -39,17 +39,36 @@ function Learning.setup(opts)
       "a future release", "learning.nvim", false)
   end
 
+  -- grab the user's provider (if any) BEFORE the deep-merge: it must REPLACE the
+  -- default verbatim, never merge into it. the default is the free fallback, whose
+  -- blank Authorization header would otherwise deep-merge onto a real provider that
+  -- omits `headers` and silently blank its auth.
+  local user_provider = opts and opts.provider
+
   config.options = vim.tbl_deep_extend("force", config.options, opts or {})
 
   if type(config.options.ignored_buffers) == "function" then
     config.options.ignored_buffers = config.options.ignored_buffers()
   end
 
-  local provider = config.options.provider
-  if provider.api_url == "" or provider.model == "" or provider.api_key == "" then
-    vim.notify("[learning.nvim] provider api_url, model and api_key must be set",
-      vim.log.levels.ERROR)
-    return
+  -- without a configured provider, keep the free keyless default so the plugin
+  -- works out of the box — warn (not error) so the user knows to configure their
+  -- own for better results. with one, take it as-is (verbatim, see above).
+  if user_provider then
+    config.options.provider = user_provider
+  else
+    vim.notify("[learning.nvim] no provider configured — using the free OpenCode Zen "
+      .. "provider. Set `provider` in setup() to use your own model for better results.",
+      vim.log.levels.WARN)
+  end
+
+  -- apply configured highlight groups (e.g. LearningSpinner)
+  for group, spec in pairs(config.options.highlights or {}) do
+    if type(spec) == "string" then
+      pcall(vim.api.nvim_set_hl, 0, group, { link = spec, })
+    elseif type(spec) == "table" then
+      pcall(vim.api.nvim_set_hl, 0, group, spec)
+    end
   end
 
   -- snapshot the buffer on entry so the first edit has a baseline to diff against
@@ -166,7 +185,9 @@ function Learning.explain()
     return
   end
 
+  utils.show_spinner()
   ai.explain(table.concat(lines, "\n"), vim.bo[buf].filetype, function(suggestion)
+    utils.hide_spinner()
     if not (suggestion and suggestion.summary) then return end
     window.show({
       summary = suggestion.summary,
@@ -285,10 +306,17 @@ local function send_suggestion()
       return settle()
     end
 
+    -- phase 1 cleared the gate: we're committing to a stage-2 request that will
+    -- open a window. tell the user what's coming and show the loading spinner
+    -- while the heavier teach/remind request is in flight.
+    vim.notify("[learning.nvim] is going to teach you about `" .. need.feature .. "`")
+    utils.show_spinner()
+
     -- a feature the user has demonstrably known (used >= know_threshold times) is a
     -- slip, not a gap: nudge with a reminder. otherwise teach it and offer a drill.
     if store.is_known(filetype, need.feature) then
       ai.remind(change, filetype, need.feature, function(reminder)
+        utils.hide_spinner()
         settle()
         if reminder then
           Learning.show_reminder(buf, change, filetype, need.feature, reminder.summary)
@@ -296,6 +324,7 @@ local function send_suggestion()
       end)
     else
       ai.teach(change, filetype, need.feature, function(suggestion)
+        utils.hide_spinner()
         settle()
         if suggestion then Learning.show_suggestion(buf, filetype, need.feature, suggestion) end
       end)

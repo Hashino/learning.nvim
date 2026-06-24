@@ -95,9 +95,9 @@ function Window.show(opts)
     for _, a in ipairs(opts.actions) do
       table.insert(parts, a.key .. " " .. a.label)
     end
-    winbar = " [Learning] " .. table.concat(parts, " | ")
+    winbar = " [learning.nvim] " .. table.concat(parts, " | ")
   end
-  vim.api.nvim_set_option_value("winbar", winbar or " [Learning]", { win = Window.win_id, })
+  vim.api.nvim_set_option_value("winbar", winbar or " [learning.nvim]", { win = Window.win_id, })
 
   -- keep win_id accurate if the window is closed by other means
   vim.api.nvim_create_autocmd("WinClosed", {

@@ -1,5 +1,6 @@
 local config  = require("learning.config")
 local ai      = require("learning.ai")
+local utils   = require("learning.utils")
 local window  = require("learning.window")
 local Session = require("learning.teach_session")
 
@@ -95,7 +96,7 @@ local function show_hud(sess, example)
   window.show({
     summary = table.concat(body, "\n"),
     focus = false,
-    winbar = string.format(" [Learning] %s submit | %s give up | %s keep & stop",
+    winbar = string.format(" [learning.nvim] %s submit | %s give up | %s keep & stop",
       k.submit, k.give_up, k.dismiss),
   })
 end
@@ -114,7 +115,11 @@ local function arm_timer(buf)
   end))
 end
 
---- fetches an example for `phase` and renders it (no-op if the drill ended first).
+--- fetches a closer example for `phase` and renders it after a failed submit. the
+--- HUD is hidden and the spinner shown by the caller while the request is in
+--- flight; this hides the spinner and re-renders the HUD once it returns (falling
+--- back to the retained explanation if generation yields nothing, so the drill
+--- window never stays hidden). no-op if the drill ended first.
 ---@param buf integer
 ---@param phase string
 local function escalate(buf, phase)
@@ -122,7 +127,9 @@ local function escalate(buf, phase)
   if not sess then return end
   local code = table.concat(attempt_lines(sess), "\n")
   ai.gen_example(sess.feature, sess.filetype, phase, code, function(example)
-    if sessions[buf] and example then show_hud(sessions[buf], example) end
+    utils.hide_spinner()
+    local s = sessions[buf]
+    if s then show_hud(s, example or { explanation = s.explanation, }) end
   end)
 end
 
@@ -147,6 +154,12 @@ function Drill.submit(buf)
       vim.notify("[learning.nvim] 🎉 you learned `" .. s.feature .. "`",
         vim.log.levels.INFO)
     elseif action.kind == "example" then
+      -- wrong, and the scaffold is escalating: tell the learner a closer example
+      -- is coming, hide the now-stale HUD, and show the spinner until it lands.
+      vim.notify("[learning.nvim] your answer is incorrect, generating a more detailed explanation",
+        vim.log.levels.WARN)
+      window.close()
+      utils.show_spinner()
       escalate(buf, action.phase)
     elseif action.kind == "retry" then
       vim.notify("[learning.nvim] not quite — keep trying", vim.log.levels.INFO)

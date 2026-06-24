@@ -6,22 +6,23 @@ Output demo.mp4
 
 Require nvim
 
-Set FontSize 18
-Set Width 1280
-Set Height 720
+Set FontSize 27
+Set Width 1920
+Set Height 1080
 Set FontFamily "UbuntuMono Nerd Font"
 Set Theme "nord"
-Set Framerate 24
+Set Framerate 30
 Set TypingSpeed 120ms
 Set Padding 20
 Set WindowBar "Colorful"
 Set BorderRadius 12
 
-# Open demo.c — it already contains one idiomatic function (sum)
+# Open demo.c — it already contains one idiomatic function (sum). Wait for the
+# file's own text instead of a fixed Sleep, so we reveal a fully-loaded editor.
 Hide
 Type "nvim -u init.lua demo.c"
 Enter
-Sleep 2s
+Wait+Screen@30s /sum of all elements/
 Show
 Sleep 1s
 
@@ -50,17 +51,16 @@ Enter
 Type "}"
 Escape
 
-# Wait for the live suggestion window. mercury is ~1-2s; the suggestion is a
-# two-call cascade (evaluate -> teach), so give it a few seconds. (Fixed Sleep,
-# not Wait: a Wait timeout aborts the whole recording, and a live AI is not
-# guaranteed to print a given string — re-record if a take doesn't trigger.)
-Sleep 6s
+# Wait for the live suggestion window. The window's winbar carries the static
+# "dismiss" action label — deterministic chrome, not live AI text — so we can
+# anchor on it. (A Wait timeout aborts the whole recording, so we only ever Wait
+# on guaranteed window chrome, never on the model's generated prose.)
+Wait+Screen@30s /dismiss/
 
-# Accept it: enter the learn-mode drill (suggestion.learn = Ctrl+L). Commenting
-# the reference + the fresh line happen synchronously, so we can type right away;
-# the worked-example HUD fills in a beat later.
+# Accept it: enter the learn-mode drill (suggestion.learn = Ctrl+L). The HUD's
+# winbar carries the static "submit" label once the worked example renders.
 Ctrl+L
-Sleep 2s
+Wait+Screen@30s /submit/
 
 # First attempt: fail on purpose by re-typing the same branchy version.
 Type "i"
@@ -79,10 +79,12 @@ Type "}"
 Escape
 Sleep 500ms
 
-# Submit (drilling.submit = Ctrl+S). Still branchy -> the scaffold escalates to
-# a closer, easier worked example.
+# Submit (drilling.submit = Ctrl+S). Still branchy -> the scaffold escalates: the
+# plugin notifies it's "generating a more detailed explanation" (deterministic
+# text), hides the HUD, then re-renders it (the "submit" label returns).
 Ctrl+S
-Sleep 4s
+Wait+Screen@30s /generating a more detailed explanation/
+Wait+Screen@30s /submit/
 
 # Collapse the four body lines into the idiomatic ternary and pass. From the
 # closing brace: up to the `if`, delete the 4-line body, open a line above the
@@ -97,7 +99,9 @@ Type "return a > b ? a : b;"
 Escape
 Sleep 500ms
 Ctrl+S
-Sleep 4s
+
+# Pass: the plugin notifies "you learned `...`" (deterministic mastery text).
+Wait+Screen@30s /you learned/
 
 # Drill mastered: the comment reference is dropped, the idiomatic code kept.
 # Move up to the original sum() and explain one of its lines.
@@ -113,13 +117,16 @@ Sleep 800ms
 Type ":Learning explain"
 Enter
 
-# Show the explanation window (one ai.explain call).
-Sleep 6s
+# Wait for the explanation window (one ai.explain call) via its static "dismiss"
+# winbar label, which can't appear before the window does.
+Wait+Screen@30s /dismiss/
+Sleep 2s
 
 # Dismiss the explanation (suggestion.dismiss = Escape) and quit unsaved so
-# demo.c stays pristine for the next run.
+# demo.c stays pristine. Hide before quitting so the bare shell never shows.
 Escape
 Sleep 1s
+Hide
 Type ":qa!"
 Enter
 Sleep 1s

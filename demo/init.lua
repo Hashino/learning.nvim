@@ -7,6 +7,28 @@ vim.g.mapleader = ","
 vim.opt.number = true
 vim.opt.relativenumber = false
 
+-- No swapfile: keeps recordings clean (no "found a swap file" prompt) and lets
+-- the explain/drill quality-check tapes record in parallel against the same
+-- demo.c without colliding.
+vim.opt.swapfile = false
+
+-- Per-buffer FileType setup for the recorded code:
+--   * Treesitter highlighting so the code looks nice. This mirrors the user's
+--     own config (nvim-treesitter `main` branch): the C parser + queries are
+--     installed under ~/.local/share/nvim/site — already on the default
+--     runtimepath here — and the `main` branch starts highlighting per-buffer
+--     with vim.treesitter.start() rather than a global enable. pcall so the demo
+--     still runs if the parser isn't installed (falls back to builtin syntax).
+--   * Strip comment-continuation from formatoptions: VHS types each line
+--     literally, so after a `// ...` comment line the default `formatoptions`
+--     (c/r/o) would prepend `//` to the following code (e.g. `// int larger(...)`).
+vim.api.nvim_create_autocmd("FileType", {
+  callback = function(args)
+    pcall(vim.treesitter.start, args.buf)
+    vim.opt_local.formatoptions:remove({ "c", "r", "o" })
+  end,
+})
+
 -- Match the demo file's 4-space style so auto-indented typing lines up.
 vim.opt.expandtab = true
 vim.opt.shiftwidth = 4
@@ -38,7 +60,13 @@ local function env_provider()
 end
 
 require("learning").setup({
-  debounce_ms = 250,
+  -- A generous debounce so the suggestion fires ONCE, after typing stops, on the
+  -- complete function. With a small debounce + a slow provider, a mid-typing edit
+  -- triggers an `evaluate` that's still in flight when InsertLeave fires, so the
+  -- final (complete-code) trigger is dropped by the in-flight guard and no window
+  -- appears. 1500ms is longer than any inter-keystroke gap while typing the demo
+  -- function, so only the post-Escape edit triggers the cascade.
+  debounce_ms = 1500,
   dismiss_threshold = 2,
   provider = env_provider(),
   keys = {

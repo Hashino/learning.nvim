@@ -9,6 +9,17 @@ local WIDTH = 75
 -- because weak models reliably separate the extremes but blur finer gradations.
 Config.LEVELS = { "beginner", "intermediate", "advanced", }
 
+-- the free, keyless fallback provider (OpenCode Zen's free tier, reached with no
+-- Authorization header). used when `setup()` is called without a complete
+-- provider config, so the plugin works out of the box — quality depends on this
+-- shared free model; configure your own `provider` for better results.
+Config.FREE_PROVIDER = {
+  api_url = "https://opencode.ai/zen/v1/chat/completions",
+  api_key = "free",                  -- free Zen models; only needs to be non-empty
+  model   = "nemotron-3-ultra-free", -- free; supports tool calling
+  headers = { Authorization = "", }, -- the free tier wants no auth header
+}
+
 ---@class learning.Config
 ---@field unlock_threshold? number distinct known features at the current top tier to demonstrate before the next tier unlocks (default 3)
 ---@field know_threshold? number times a feature must be demonstrated before it counts as "known" — gates promotion and reminders (default 3)
@@ -18,9 +29,12 @@ Config.LEVELS = { "beginner", "intermediate", "advanced", }
 ---@field debounce_ms? number debounce interval in ms before sending accumulated edits (default 250)
 ---@field dismiss_threshold? number times a feature must be dismissed before its auto-suggestions are suppressed
 ---@field ignored_buffers? string[]|fun():string[] elements are checked against buffer filetype/filename/filepath
----@field provider learning.Config.Provider provider options for the ai
+---@field provider learning.Config.Provider provider options for the ai; omit to fall back to the free, keyless Config.FREE_PROVIDER (with a warning). a supplied provider replaces the default verbatim
 ---@field keys? learning.Config.Keys keymaps for the suggestion window
 ---@field win_config? table window config for the suggestion window (see :h nvim_open_win())
+---@field spinner_characters? string[] frames for the loading spinner shown while a request is in flight
+---@field spinner_interval_ms? number ms between spinner frames (default 80)
+---@field highlights? table<string, table|string> highlight group definitions (a table of `nvim_set_hl` args, or a link target string)
 Config.options = {
   debounce_ms = 1500,
 
@@ -57,7 +71,11 @@ Config.options = {
   ---@field api_url string api url for the provider
   ---@field model string model to use for the provider
   ---@field headers? table<string, string> DEV ONLY: extra request headers, merged over the defaults. an empty-string value removes a default header (e.g. blanking Authorization for keyless dev endpoints). not a supported production feature.
-  provider = { api_key = "", api_url = "", model = "", },
+  -- defaults to the free, keyless fallback so the plugin works out of the box. a
+  -- `provider` passed to setup() REPLACES this verbatim (never deep-merged), so the
+  -- free tier's blank Authorization header can't leak onto a real provider — see
+  -- learning.setup. configure your own provider for better results.
+  provider = vim.deepcopy(Config.FREE_PROVIDER),
 
   ---@class learning.Config.Keys
   ---@field suggestion? { dismiss?: string, learn?: string } keys on a suggestion/reminder window
@@ -69,6 +87,20 @@ Config.options = {
     -- checked, give up (restores your original code), or dismiss (keeps what you
     -- wrote). avoid <Esc> here — it would collide with normal editing.
     drilling = { submit = "<S-CR>", give_up = "<C-g>", dismiss = "<C-x>", },
+  },
+
+  -- loading spinner shown in the bottom-right corner while a request is in
+  -- flight (on `:Learning explain`, and after stage-1 evaluation commits to a
+  -- stage-2 teach/remind). braille frames, animated every spinner_interval_ms.
+  spinner_characters = { "⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷", },
+  spinner_interval_ms = 80,
+
+  -- highlight groups, applied on setup. values are either a table of
+  -- `nvim_set_hl` args or a string naming a group to link to.
+  ---@class learning.Config.Highlights
+  ---@field LearningSpinner? table|string highlight for the loading spinner
+  highlights = {
+    LearningSpinner = { fg = "#89b4fa", bold = true, },
   },
 
   -- see :h nvim_open_win() for available options

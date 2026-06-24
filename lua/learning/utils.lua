@@ -2,6 +2,61 @@ local config = require("learning.config")
 
 local Utils = {}
 
+-- spinner state (internal). a single shared spinner: requests don't overlap per
+-- buffer (the `learning_pending` guard), and explain is one-shot.
+local spinner_win = nil ---@type integer?
+local spinner_timer = nil
+local spinner_idx = 1 ---@type integer
+
+--- shows a braille spinner in the bottom-right corner while a request is in
+--- flight. idempotent — a second call while one is already up is a no-op.
+function Utils.show_spinner()
+  if spinner_win and vim.api.nvim_win_is_valid(spinner_win) then return end
+
+  local chars = config.options.spinner_characters or { "⣾", }
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { chars[1], })
+
+  spinner_win = vim.api.nvim_open_win(buf, false, {
+    relative = "editor",
+    width = 1,
+    height = 1,
+    row = vim.o.lines - 3 - vim.o.cmdheight,
+    col = vim.o.columns - 2,
+    style = "minimal",
+    noautocmd = true,
+  })
+
+  vim.api.nvim_set_option_value("winhl", "Normal:LearningSpinner", { win = spinner_win, })
+
+  spinner_idx = 1
+  spinner_timer = vim.uv.new_timer()
+  if spinner_timer then
+    spinner_timer:start(
+      config.options.spinner_interval_ms,
+      config.options.spinner_interval_ms,
+      vim.schedule_wrap(function()
+        if not spinner_win or not vim.api.nvim_win_is_valid(spinner_win) then return end
+        spinner_idx = (spinner_idx % #chars) + 1
+        local b = vim.api.nvim_win_get_buf(spinner_win)
+        vim.api.nvim_buf_set_lines(b, 0, -1, false, { chars[spinner_idx], })
+      end))
+  end
+end
+
+--- hides and cleans up the spinner. idempotent.
+function Utils.hide_spinner()
+  if spinner_timer then
+    spinner_timer:stop()
+    spinner_timer:close()
+    spinner_timer = nil
+  end
+  if spinner_win and vim.api.nvim_win_is_valid(spinner_win) then
+    pcall(vim.api.nvim_win_close, spinner_win, true)
+  end
+  spinner_win = nil
+end
+
 -- buftypes that never make sense to suggest on
 local ignored_buftypes = {
   popup = true,
