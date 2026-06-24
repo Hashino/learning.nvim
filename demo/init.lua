@@ -39,11 +39,15 @@ vim.opt.tabstop = 4
 local plugin_root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
 vim.opt.rtp:prepend(plugin_root)
 
+-- Bootstrap showkeys using vim.pack (Neovim 0.12+)
+vim.pack.add({ "https://github.com/nvzone/showkeys" }, { confirm = false })
+require("showkeys").setup({ position = "bottom-right", timeout = 3, show_count = true })
+require("showkeys").toggle()
+
 -- The provider comes from the environment so no API key is committed (this dir
 -- is in the repo). When all three of LEARNING_API_URL / LEARNING_API_KEY /
--- LEARNING_MODEL are set, that provider is used — record.sh points them at the
--- fast mercury endpoint. If any is missing, fall back to the free, keyless
--- provider the tests use, so the demo still runs out of the box.
+-- LEARNING_MODEL are set, that provider is used. If any is missing, fall back to
+-- the free, keyless provider the tests use, so the demo still runs out of the box.
 local function env_provider()
   local url   = os.getenv("LEARNING_API_URL")
   local key   = os.getenv("LEARNING_API_KEY")
@@ -64,9 +68,8 @@ require("learning").setup({
   -- complete function. With a small debounce + a slow provider, a mid-typing edit
   -- triggers an `evaluate` that's still in flight when InsertLeave fires, so the
   -- final (complete-code) trigger is dropped by the in-flight guard and no window
-  -- appears. 1500ms is longer than any inter-keystroke gap while typing the demo
-  -- function, so only the post-Escape edit triggers the cascade.
-  debounce_ms = 1500,
+  -- appears. 7000ms matches user's personal config for claude.
+  debounce_ms = 7000,
   dismiss_threshold = 2,
   provider = env_provider(),
   keys = {

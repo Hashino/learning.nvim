@@ -1,10 +1,10 @@
-local config = require("learning.config")
-local ai     = require("learning.ai")
-local store  = require("learning.store")
-local diff   = require("learning.diff")
-local utils  = require("learning.utils")
-local window = require("learning.window")
-local drill  = require("learning.drill")
+local config   = require("learning.config")
+local ai       = require("learning.ai")
+local store    = require("learning.store")
+local diff     = require("learning.diff")
+local utils    = require("learning.utils")
+local window   = require("learning.window")
+local drill    = require("learning.drill")
 
 local Learning = {
   enabled = true,
@@ -20,23 +20,9 @@ local schedule_suggestion
 --- setup learning.nvim
 ---@param opts? learning.Config
 function Learning.setup(opts)
-  -- `eagerness` was replaced by automatic per-language skill-level progression
-  -- (config.LEVELS + unlock_threshold). Warn rather than silently ignore it, as
-  -- users often update without reading the breaking-change note.
   ---@diagnostic disable-next-line: undefined-field
-  if opts and opts.eagerness ~= nil then -- intentionally not in learning.Config
-    vim.deprecate("require('learning').setup({ eagerness })",
-      "automatic skill-level progression (remove the option; tune `unlock_threshold` instead)",
-      "a future release", "learning.nvim", false)
-  end
-
-  -- the flat `keys.confirm/dismiss` became grouped keys (suggestion vs drilling)
-  -- when the active-recall drill landed; warn rather than silently ignore them.
-  ---@diagnostic disable-next-line: undefined-field
-  if opts and opts.keys and (opts.keys.confirm ~= nil or opts.keys.dismiss ~= nil) then
-    vim.deprecate("require('learning').setup({ keys = { confirm/dismiss } })",
-      "grouped keys.suggestion.{learn,dismiss} and keys.drilling.{submit,give_up,dismiss}",
-      "a future release", "learning.nvim", false)
+  if opts and (opts.eagerness or opts.keys.confirm or opts.keys.dismiss) then -- intentionally not in learning.Config
+    vim.deprecate("deprecated configs", "check the documentation for current configs.", "0.3", "learning.nvim", false)
   end
 
   -- grab the user's provider (if any) BEFORE the deep-merge: it must REPLACE the
@@ -51,16 +37,7 @@ function Learning.setup(opts)
     config.options.ignored_buffers = config.options.ignored_buffers()
   end
 
-  -- without a configured provider, keep the free keyless default so the plugin
-  -- works out of the box — warn (not error) so the user knows to configure their
-  -- own for better results. with one, take it as-is (verbatim, see above).
-  if user_provider then
-    config.options.provider = user_provider
-  else
-    vim.notify("[learning.nvim] no provider configured — using the free OpenCode Zen "
-      .. "provider. Set `provider` in setup() to use your own model for better results.",
-      vim.log.levels.WARN)
-  end
+  config.options.provider = user_provider or config.options.provider
 
   -- apply configured highlight groups (e.g. LearningSpinner)
   for group, spec in pairs(config.options.highlights or {}) do
@@ -96,30 +73,24 @@ end
 --- builds the action list for a focused suggestion/reminder window: an optional
 --- learn/re-learn action (opens a drill) followed by dismiss. read live so a
 --- `setup` keymap change is honored.
----@param on_learn? fun() runs the learn/re-learn action; omit for dismiss-only
----@param learn_label? string winbar label for that action ("learn" / "re-learn")
----@param on_dismiss fun() runs on dismiss
----@return learning.Window.Action[]
 local function suggestion_actions(on_learn, learn_label, on_dismiss)
   local k = config.options.keys.suggestion
+  ---@diagnostic disable-next-line: need-check-nil
   local actions = { { key = k.dismiss, fn = on_dismiss, label = "dismiss", }, }
   if on_learn then
+    ---@diagnostic disable-next-line: need-check-nil
     table.insert(actions, 1, { key = k.learn, fn = on_learn, label = learn_label, })
   end
   return actions
 end
 
 --- the user's progress toward mastery (the top tier) in a language, as 0..1.
----@param p table a `store.progress_summary` result
----@return number
 local function mastery_fraction(p)
   if p.at_max then return 1 end
   return ((p.level_index - 1) + math.min(p.known_at_tier / p.threshold, 1)) / (#config.LEVELS - 1)
 end
 
 --- a compact progress bar toward mastering `language`, for a window footer.
----@param language string
----@return string
 local function progress_footer(language)
   local p = store.progress_summary(language)
   return string.format(" %s %s ", p.level, utils.bar(mastery_fraction(p), 12))

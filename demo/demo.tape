@@ -51,18 +51,18 @@ Enter
 Type "}"
 Escape
 
-# Wait for the live suggestion window. The window's winbar carries the static
-# "dismiss" action label — deterministic chrome, not live AI text — so we can
-# anchor on it. (A Wait timeout aborts the whole recording, so we only ever Wait
-# on guaranteed window chrome, never on the model's generated prose.)
-Wait+Screen@300s /dismiss/
+# Wait for the live suggestion window. First wait for the notification that
+# learning is going to teach you (deterministic text from the plugin), then wait
+# for the window's "dismiss" winbar label.
+Wait+Screen@600s /is going to teach you/
+Wait+Screen@60s /dismiss/
 Sleep 5s
 
 # Accept it: enter the learn-mode drill (suggestion.learn = Ctrl+L). The HUD's
 # winbar carries the static "submit" label once the worked example renders.
 Ctrl+L
-Wait+Screen@120s /submit/
-Sleep 3s
+Wait+Screen@180s /submit/
+Sleep 5s
 
 # First attempt: fail on purpose by re-typing the same branchy version.
 Type "i"
@@ -87,7 +87,7 @@ Sleep 500ms
 Ctrl+S
 Wait+Screen@60s /generating a more detailed explanation/
 Wait+Screen@60s /submit/
-Sleep 3s
+Sleep 5s
 
 # Collapse the four body lines into the idiomatic ternary and pass. From the
 # closing brace: up to the `if`, delete the 4-line body, open a line above the
