@@ -23,7 +23,10 @@ return function(overrides)
     -- no `provider`: setup() falls back to the free keyless default.
     debounce_ms = 250,
     dismiss_threshold = 2,
-    keys = { confirm = "<C-a>", }, -- PTY-sendable confirm key (see tests.md)
+    keys = {
+      suggestion = { learn = "<C-a>", dismiss = "<Esc>" },
+      drilling = { submit = "<S-CR>", give_up = "<C-g>", dismiss = "<C-x>" },
+    }, -- PTY-sendable confirm key (see tests.md)
   }, overrides or {}))
 
   vim.keymap.set("v", "<leader>le", function()

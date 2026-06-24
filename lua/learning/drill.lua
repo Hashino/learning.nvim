@@ -151,7 +151,7 @@ function Drill.submit(buf)
       pcall(vim.api.nvim_buf_set_lines, buf, s.comment_start,
         s.comment_start + s.comment_count, false, {})
       cleanup(buf)
-      vim.notify("[learning.nvim] 🎉 you learned `" .. s.feature .. "`",
+      vim.notify("[learning.nvim] you learned `" .. s.feature .. "`",
         vim.log.levels.INFO)
     elseif action.kind == "example" then
       -- wrong, and the scaffold is escalating: tell the learner a closer example

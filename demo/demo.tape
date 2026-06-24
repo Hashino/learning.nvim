@@ -55,12 +55,14 @@ Escape
 # "dismiss" action label — deterministic chrome, not live AI text — so we can
 # anchor on it. (A Wait timeout aborts the whole recording, so we only ever Wait
 # on guaranteed window chrome, never on the model's generated prose.)
-Wait+Screen@30s /dismiss/
+Wait+Screen@300s /dismiss/
+Sleep 5s
 
 # Accept it: enter the learn-mode drill (suggestion.learn = Ctrl+L). The HUD's
 # winbar carries the static "submit" label once the worked example renders.
 Ctrl+L
-Wait+Screen@30s /submit/
+Wait+Screen@120s /submit/
+Sleep 3s
 
 # First attempt: fail on purpose by re-typing the same branchy version.
 Type "i"
@@ -83,8 +85,9 @@ Sleep 500ms
 # plugin notifies it's "generating a more detailed explanation" (deterministic
 # text), hides the HUD, then re-renders it (the "submit" label returns).
 Ctrl+S
-Wait+Screen@30s /generating a more detailed explanation/
-Wait+Screen@30s /submit/
+Wait+Screen@60s /generating a more detailed explanation/
+Wait+Screen@60s /submit/
+Sleep 3s
 
 # Collapse the four body lines into the idiomatic ternary and pass. From the
 # closing brace: up to the `if`, delete the 4-line body, open a line above the
@@ -101,7 +104,8 @@ Sleep 500ms
 Ctrl+S
 
 # Pass: the plugin notifies "you learned `...`" (deterministic mastery text).
-Wait+Screen@30s /you learned/
+Wait+Screen@60s /you learned/
+Sleep 3s
 
 # Drill mastered: the comment reference is dropped, the idiomatic code kept.
 # Move up to the original sum() and explain one of its lines.
@@ -119,8 +123,8 @@ Enter
 
 # Wait for the explanation window (one ai.explain call) via its static "dismiss"
 # winbar label, which can't appear before the window does.
-Wait+Screen@30s /dismiss/
-Sleep 2s
+Wait+Screen@60s /dismiss/
+Sleep 5s
 
 # Dismiss the explanation (suggestion.dismiss = Escape) and quit unsaved so
 # demo.c stays pristine. Hide before quitting so the bare shell never shows.
