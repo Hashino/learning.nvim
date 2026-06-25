@@ -1,16 +1,23 @@
-local config   = require("learning.config")
-local ai       = require("learning.ai")
-local store    = require("learning.store")
-local diff     = require("learning.diff")
-local utils    = require("learning.utils")
-local window   = require("learning.window")
-local drill    = require("learning.drill")
+local config               = require("learning.config")
+local ai                   = require("learning.ai")
+local store                = require("learning.store")
+local diff                 = require("learning.diff")
+local utils                = require("learning.utils")
+local window               = require("learning.window")
+local drill                = require("learning.drill")
 
-local Learning = {
+local Learning             = {
   enabled = true,
+  _state = "not",
 
   augroup = vim.api.nvim_create_augroup("Learning", { clear = true, }),
 }
+
+-- provider validation can hit a transient error (e.g. a 5xx); retry a few times
+-- before giving up so one hiccup doesn't disable the whole session.
+local VALIDATE_ATTEMPTS    = 3
+local VALIDATE_INTERVAL_MS = 3000
+
 
 -- the debounced auto-suggestion trigger. defined with the rest of the
 -- pipeline at the bottom of the file, forward-declared so `setup` can stay
@@ -21,7 +28,7 @@ local schedule_suggestion
 ---@param opts? learning.Config
 function Learning.setup(opts)
   ---@diagnostic disable-next-line: undefined-field
-  if opts and (opts.eagerness or opts.keys.confirm or opts.keys.dismiss) then -- intentionally not in learning.Config
+  if opts and (opts.eagerness or (opts.keys and (opts.keys.confirm or opts.keys.dismiss))) then
     vim.deprecate("deprecated configs", "check the documentation for current configs.", "0.3", "learning.nvim", false)
   end
 
@@ -48,26 +55,44 @@ function Learning.setup(opts)
     end
   end
 
-  -- snapshot the buffer on entry so the first edit has a baseline to diff against
-  vim.api.nvim_create_autocmd("BufEnter", {
-    group = Learning.augroup,
-    callback = function()
-      local buf = vim.api.nvim_get_current_buf()
-      if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
-        local content = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-        vim.b.learning_old = content
-        vim.b.learning_new = content
-      end
-    end,
-  })
+  Learning._state = "initializing"
 
-  -- run the (debounced) suggestion pipeline whenever the buffer changes
-  vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP", "TextChanged", "InsertLeave", }, {
-    group = Learning.augroup,
-    callback = function()
-      if Learning.enabled then schedule_suggestion() end
-    end,
-  })
+  local function attempt(n)
+    ai.validate_provider(function(validation)
+      if validation.success then
+        -- snapshot the buffer on entry so the first edit has a baseline to diff against
+        vim.api.nvim_create_autocmd("BufEnter", {
+          group = Learning.augroup,
+          callback = function()
+            local buf = vim.api.nvim_get_current_buf()
+            if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
+              local content = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+              vim.b.learning_old = content
+              vim.b.learning_new = content
+            end
+          end,
+        })
+
+        -- run the (debounced) suggestion pipeline whenever the buffer changes
+        vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP", "TextChanged", "InsertLeave", }, {
+          group = Learning.augroup,
+          callback = function()
+            if Learning.enabled then schedule_suggestion() end
+          end,
+        })
+
+        Learning._state = "initialized"
+      elseif n < VALIDATE_ATTEMPTS then
+        vim.defer_fn(function() attempt(n + 1) end, VALIDATE_INTERVAL_MS)
+      else
+        vim.notify("[learning.nvim] provider validation failed: " .. validation.error,
+          vim.log.levels.ERROR)
+        Learning._state = "error"
+      end
+    end)
+  end
+
+  attempt(1)
 end
 
 --- builds the action list for a focused suggestion/reminder window: an optional
@@ -144,9 +169,34 @@ function Learning.show_reminder(buf, change, filetype, feature, text)
   })
 end
 
+-- check if the plugin is properly initialized before allowing AI operations
+local function check_state()
+  if Learning._state ~= "initialized" then
+    local hint = {
+      ["not"] = {
+        "learning.setup() was not called — add require(\"learning\").setup({ ... }) to your config",
+        vim.log.levels.ERROR,
+      },
+      ["initializing"] = {
+        "learning is still initializing, wait a moment and try again",
+        vim.log.levels.WARN,
+      },
+      ["error"] = {
+        "learning failed to initialize — check your provider config (see :messages)",
+        vim.log.levels.ERROR,
+      },
+    }
+    local h = hint[Learning._state]
+    vim.notify("[learning.nvim] " .. h[1], h[2])
+    return false
+  end
+  return true
+end
+
 --- explains the current visual selection on demand (`:Learning explain`). a plain,
 --- dismiss-only note — no drill, no dismissal recorded.
 function Learning.explain()
+  if not check_state() then return end
   local buf = vim.api.nvim_get_current_buf()
   if not (vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)) then return end
 
@@ -233,7 +283,7 @@ end
 --- passes, the heavier stage-2 `teach` that produces the shown suggestion. The
 --- `learning_pending` guard spans both calls so the gated-out path stays small.
 local function send_suggestion()
-  if not Learning.enabled or not utils.should_suggest() then return end
+  if not Learning.enabled or Learning._state ~= "initialized" or not utils.should_suggest() then return end
 
   local buf = vim.api.nvim_get_current_buf()
   if not (vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)) then return end

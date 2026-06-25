@@ -193,6 +193,96 @@ local function make_ai_request(prompt, tools, tool_name, callback)
   attempt(1, "force")
 end
 
+--- extracts a human-readable error message from an error response.
+--- handles `{ error = "msg", message = "..." }` (Mercury) and
+--- `{ error = { message = "..." } }` (OpenAI/Anthropic)
+---@param decoded table
+---@return string|nil
+local function extract_error(decoded)
+  local err = decoded.error
+  if type(err) == "string" then
+    if type(decoded.message) == "string" and decoded.message ~= "" then
+      return err .. ": " .. decoded.message
+    end
+    return err
+  elseif type(err) == "table" then
+    return err.message or err.type or vim.json.encode(err)
+  end
+  return nil
+end
+
+--- makes a test request to validate the provider config.
+--- sends a minimal prompt without tools to check basic connectivity.
+---@param callback fun(result: { success: boolean, error?: string })
+function AI.validate_provider(callback)
+  local prompt = "Reply with exactly: OK"
+  local anthropic = is_anthropic()
+
+  local headers = { ["Content-Type"] = "application/json", }
+  local payload = {
+    model = config.options.provider.model,
+    messages = { { role = "user", content = prompt, }, },
+  }
+
+  if anthropic then
+    headers["x-api-key"] = config.options.provider.api_key
+    headers["anthropic-version"] = "2023-06-01"
+    payload.max_tokens = 16
+    payload.tools = {}
+    payload.tool_choice = { type = "auto", }
+  else
+    headers["Authorization"] = "Bearer " .. config.options.provider.api_key
+    payload.tools = {}
+    payload.tool_choice = "auto"
+  end
+
+  for k, v in pairs(config.options.provider.headers or {}) do
+    headers[k] = (v ~= "" and v) or nil
+  end
+
+  local body = vim.json.encode(payload)
+  local cmd = { "curl", "-sS", "-X", "POST", config.options.provider.api_url, }
+  for k, v in pairs(headers) do
+    table.insert(cmd, "-H")
+    table.insert(cmd, k .. ": " .. v)
+  end
+  table.insert(cmd, "-d")
+  table.insert(cmd, body)
+
+  vim.fn.jobstart(cmd, {
+    stdout_buffered = true,
+    on_stdout = function(_, data, _)
+      if not data then return end
+      vim.schedule(function()
+        local output = table.concat(data, "")
+        local ok, decoded = pcall(vim.json.decode, output)
+        if not ok or type(decoded) ~= "table" then
+          return callback({ success = false, error = "could not parse API response: " .. output })
+        end
+
+        local api_err = extract_error(decoded)
+        if api_err then
+          return callback({ success = false, error = api_err })
+        end
+
+        local content = extract_content(decoded, anthropic)
+        if type(content) ~= "string" or content == "" then
+          return callback({ success = false, error = "provider returned empty content" })
+        end
+
+        callback({ success = true })
+      end)
+    end,
+    on_exit = function(_, code, _)
+      if code ~= 0 then
+        vim.schedule(function()
+          callback({ success = false, error = "curl exited with code " .. code })
+        end)
+      end
+    end,
+  })
+end
+
 ---@class learning.Evaluation stage-1 result: what to teach + what's already known
 ---@field need_to_learn { feature: string, level: string } the missed feature; level "none" = nothing to teach
 ---@field already_knows { feature: string, level: string }[] features the changed lines show the user already uses
