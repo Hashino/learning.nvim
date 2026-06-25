@@ -57,34 +57,43 @@ function Learning.setup(opts)
 
   Learning._state = "initializing"
 
+  -- snapshot the current buffer immediately so edits at startup have a baseline
+  local buf = vim.api.nvim_get_current_buf()
+  if vim.api.nvim_buf_is_valid(buf) then
+    local content = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    vim.b.learning_old = content
+    vim.b.learning_new = content
+  end
+
+  -- register autocmds synchronously so they catch events during validation
+  vim.api.nvim_create_autocmd("BufEnter", {
+    group = Learning.augroup,
+    callback = function()
+      local buf = vim.api.nvim_get_current_buf()
+      if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
+        local content = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+        vim.b.learning_old = content
+        vim.b.learning_new = content
+      end
+    end,
+  })
+
+  vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP", "TextChanged", "InsertLeave" }, {
+    group = Learning.augroup,
+    callback = function()
+      if Learning.enabled then schedule_suggestion() end
+    end,
+  })
+
   local function attempt(n)
     ai.validate_provider(function(validation)
       if validation.success then
-        -- snapshot the buffer on entry so the first edit has a baseline to diff against
-        vim.api.nvim_create_autocmd("BufEnter", {
-          group = Learning.augroup,
-          callback = function()
-            local buf = vim.api.nvim_get_current_buf()
-            if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) then
-              local content = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-              vim.b.learning_old = content
-              vim.b.learning_new = content
-            end
-          end,
-        })
-
-        -- run the (debounced) suggestion pipeline whenever the buffer changes
-        vim.api.nvim_create_autocmd({ "TextChangedI", "TextChangedP", "TextChanged", "InsertLeave", }, {
-          group = Learning.augroup,
-          callback = function()
-            if Learning.enabled then schedule_suggestion() end
-          end,
-        })
-
         Learning._state = "initialized"
       elseif n < VALIDATE_ATTEMPTS then
         vim.defer_fn(function() attempt(n + 1) end, VALIDATE_INTERVAL_MS)
       else
+        -- clean up autocmds on permanent validation failure
+        vim.api.nvim_clear_autocmds({ group = Learning.augroup })
         vim.notify("[learning.nvim] provider validation failed: " .. validation.error,
           vim.log.levels.ERROR)
         Learning._state = "error"

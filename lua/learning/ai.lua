@@ -432,8 +432,8 @@ function AI.evaluate(diff, filetype, callback)
             table.insert(knows, { feature = item.feature, level = lvl, })
           end
         end
-      end
     end
+  end
 
     callback({
       need_to_learn = { feature = feature, level = level, },
