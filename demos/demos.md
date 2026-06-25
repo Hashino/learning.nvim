@@ -17,9 +17,11 @@ hand-made.
 ## Regenerating the GIF
 
 ```sh
-export LEARNING_API_KEY=sk_...    # your mercury (Inception Labs) key
+export LEARNING_API_KEY=sk_...
 ./demo/record.sh
 ```
+
+`record.sh` moves aside `~/.local/share/nvim/learning.nvim` so recordings start from a clean "beginner" state.
 
 `record.sh`:
 

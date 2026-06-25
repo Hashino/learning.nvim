@@ -12,6 +12,21 @@ vim.opt.relativenumber = false
 -- demo.c without colliding.
 vim.opt.swapfile = false
 
+-- Install plugins via vim.pack (Neovim 0.12+)
+vim.pack.add({
+  { src = "https://github.com/rmehri01/onenord.nvim" },
+  { src = "https://github.com/nvzone/showkeys" },
+}, { confirm = false })
+
+-- Configure showkeys: bottom-left position
+require("showkeys").setup({
+  position = "bottom-left",
+})
+require("showkeys").toggle()
+
+-- Set onenord colorscheme
+vim.cmd.colorscheme("onenord")
+
 -- Per-buffer FileType setup for the recorded code:
 --   * Treesitter highlighting so the code looks nice. This mirrors the user's
 --     own config (nvim-treesitter `main` branch): the C parser + queries are
@@ -34,20 +49,19 @@ vim.opt.expandtab = true
 vim.opt.shiftwidth = 4
 vim.opt.tabstop = 4
 
--- Add learning.nvim to runtime — resolved relative to this file (…/demo/init.lua)
--- so the demo works from any checkout without a hardcoded path.
-local plugin_root = vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
+-- Add learning.nvim to runtime. record.sh copies this file into a temp config
+-- dir, so its own path can't locate the repo — it exports LEARNING_PLUGIN_ROOT
+-- (the repo root) for that case. Fall back to resolving relative to this file
+-- (…/demos/init.lua) so a direct `nvim -u demos/init.lua` still works.
+local plugin_root = os.getenv("LEARNING_PLUGIN_ROOT")
+  or vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p:h:h")
 vim.opt.rtp:prepend(plugin_root)
-
--- Bootstrap showkeys using vim.pack (Neovim 0.12+)
-vim.pack.add({ "https://github.com/nvzone/showkeys" }, { confirm = false })
-require("showkeys").setup({ position = "bottom-right", timeout = 3, show_count = true })
-require("showkeys").toggle()
 
 -- The provider comes from the environment so no API key is committed (this dir
 -- is in the repo). When all three of LEARNING_API_URL / LEARNING_API_KEY /
--- LEARNING_MODEL are set, that provider is used. If any is missing, fall back to
--- the free, keyless provider the tests use, so the demo still runs out of the box.
+-- LEARNING_MODEL are set, that provider is used — record.sh points them at the
+-- fast mercury endpoint. If any is missing, fall back to the free, keyless
+-- provider the tests use, so the demo still runs out of the box.
 local function env_provider()
   local url   = os.getenv("LEARNING_API_URL")
   local key   = os.getenv("LEARNING_API_KEY")
@@ -55,12 +69,7 @@ local function env_provider()
   if url and url ~= "" and key and key ~= "" and model and model ~= "" then
     return { api_url = url, api_key = key, model = model }
   end
-  return {
-    api_url = "https://opencode.ai/zen/v1/chat/completions",
-    api_key = "dummy",
-    model   = "nemotron-3-ultra-free",
-    headers = { Authorization = "" },
-  }
+  return require("learning.config").options.provider
 end
 
 require("learning").setup({
@@ -68,8 +77,9 @@ require("learning").setup({
   -- complete function. With a small debounce + a slow provider, a mid-typing edit
   -- triggers an `evaluate` that's still in flight when InsertLeave fires, so the
   -- final (complete-code) trigger is dropped by the in-flight guard and no window
-  -- appears. 7000ms matches user's personal config for claude.
-  debounce_ms = 7000,
+  -- appears. 1500ms is longer than any inter-keystroke gap while typing the demo
+  -- function, so only the post-Escape edit triggers the cascade.
+  debounce_ms = 5000,
   dismiss_threshold = 2,
   provider = env_provider(),
   keys = {
@@ -78,8 +88,3 @@ require("learning").setup({
     drilling = { submit = "<C-s>", give_up = "<C-g>", dismiss = "<C-x>" },
   },
 })
-
--- explain the visual selection: <leader>le -> ",le" under the demo leader
-vim.keymap.set("v", "<leader>le", function()
-  require("learning").explain()
-end, { desc = "[L]earning [E]xplain" })
