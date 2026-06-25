@@ -12,7 +12,7 @@
 
 learn the language features naturally as you code
 
-![demo](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demo/demo.gif)
+![demo](https://raw.githubusercontent.com/Hashino/learning.nvim/main/demos/drill/drill.gif)
 
 ## commands
 
@@ -24,12 +24,12 @@ learn the language features naturally as you code
 
 ## suppressing repeated suggestions
 
-Auto-suggestions teach a single language *feature* at a time. When you dismiss a
+auto-suggestions teach a single language *feature* at a time. when you dismiss a
 suggestion about the same feature (for the same language) `dismiss_threshold`
 times (default `2`), future suggestions about that feature stop showing up.
 
 dismissals are stored in `~/.local/share/nvim/learning.nvim/dismissed.json`.
-Delete that file to start over.
+delete that file to start over.
 
 ## installation
 
@@ -156,7 +156,7 @@ vim.keymap.set("v", "<leader>le", require("learning").toggle,
 
 ## testing
 
-The `tests/` directory has an automated suite for forking or contributing.
+the `tests/` directory has an automated suite for forking or contributing.
 `tests/run.lua` drives the real plugin end-to-end against a configured provider
 and ships a keyless config that uses a free provider, so no API key is needed:
 
@@ -165,7 +165,7 @@ XDG_DATA_HOME=/tmp/learning-test nvim --headless \
   -u tests/init.lua -c "luafile tests/run.lua"
 ```
 
-Only run it after a **big change to the main logic** (edit detection, prompts,
+only run it after a **big change to the main logic** (edit detection, prompts,
 tool calls, skill-level classification/gating, or dismissal suppression), and run
 it a few times since the backend is a live model. See [`tests/tests.md`](tests/tests.md)
 for what it covers and an optional interactive smoke.
