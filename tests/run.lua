@@ -103,7 +103,7 @@ do
   ai.gen_example = function(_, _, phase, _, cb) cb({ explanation = "ex", code = { phase, }, }) end
   local verify_result = false
   ---@diagnostic disable-next-line: duplicate-set-field
-  ai.verify = function(_, _, _, cb) cb(verify_result) end
+  ai.verify = function(_, _, _, _, cb) cb(verify_result) end
 
   config.options.dismiss_threshold = 1
   config.options.drill_related_after = 1
@@ -112,11 +112,13 @@ do
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_current_buf(buf)
   local SRC = { "def f(xs):", "    acc = 0", "    for x in xs:", "        acc = acc + x", "    return acc", }
-  local edit = { start = 1, final = 4, content = { "    return sum(xs)", }, }
+  -- the drill's line range now comes from the diff, not a model edit: comment the
+  -- loop body (0-indexed lines 1..4 exclusive).
+  local change = { change_start = 1, change_final = 4, }
 
   -- dismissing a suggestion records toward suppression (and opens no drill)
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, SRC)
-  learning.show_suggestion(buf, "python", "e2e-tracked", { summary = "use sum()", edit = edit, })
+  learning.show_suggestion(buf, "python", "e2e-tracked", { summary = "use sum()", }, change)
   press(vim.api.nvim_win_get_buf(window.win_id), config.options.keys.suggestion.dismiss)
   check("suggestion: dismiss records toward suppression and opens no drill",
     store.is_suppressed("python", "e2e-tracked") == true and drill.active(buf) == false)
@@ -124,7 +126,7 @@ do
   -- "learn" opens a drill: the target lines get commented and the drill goes active
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, SRC)
   vim.b[buf].learning_old = nil
-  learning.show_suggestion(buf, "python", "e2e-learn", { summary = "use sum()", edit = edit, })
+  learning.show_suggestion(buf, "python", "e2e-learn", { summary = "use sum()", }, change)
   press(vim.api.nvim_win_get_buf(window.win_id), config.options.keys.suggestion.learn)
   check("suggestion: learn opens a drill and comments the target lines",
     drill.active(buf) == true and vim.api.nvim_buf_get_lines(buf, 0, -1, false)[2]:match("^%s*#") ~= nil)
@@ -140,7 +142,7 @@ do
   -- give_up restores the original code and ends the drill
   vim.api.nvim_buf_set_lines(buf, 0, -1, false, SRC)
   vim.b[buf].learning_old = nil
-  learning.show_suggestion(buf, "python", "e2e-giveup", { summary = "use sum()", edit = edit, })
+  learning.show_suggestion(buf, "python", "e2e-giveup", { summary = "use sum()", }, change)
   press(vim.api.nvim_win_get_buf(window.win_id), config.options.keys.suggestion.learn)
   drill.give_up(buf)
   check("drill: give_up restores the original buffer and ends",
@@ -272,6 +274,28 @@ do
 
   check("session: give_up restores the buffer and ends", TS.new("zip", 2, 4):give_up().kind == "restore")
   check("session: dismiss leaves the buffer and ends", TS.new("zip", 2, 4):dismiss().kind == "close")
+end
+
+-- the shipped default scaffold policy: TWO failures on a rung before it escalates
+-- (drill_related_after = 2 -> related, drill_solution_after = 4 -> solution), and
+-- the solution rung never ends. drive the reducer with the shipped thresholds.
+do
+  local TS = require("learning.teach_session")
+  local s = TS.new("enumerate", 2, 4)
+  check("policy: 1st analogous failure retries (no escalation yet)",
+    s:result(false).kind == "retry" and s.phase == "analogous")
+  do
+    local a = s:result(false)
+    check("policy: 2nd failure escalates analogous -> related", a.kind == "example" and a.phase == "related")
+  end
+  check("policy: 1st related failure retries", s:result(false).kind == "retry" and s.phase == "related")
+  do
+    local a = s:result(false)
+    check("policy: 4th failure escalates related -> solution", a.kind == "example" and a.phase == "solution")
+  end
+  check("policy: the solution rung never ends",
+    s:result(false).kind == "retry" and s:result(false).kind == "retry"
+    and s:is_active() and s.phase == "solution")
 end
 
 -- progress helpers (deterministic): the bar renderer and the per-language summary
@@ -462,19 +486,19 @@ for _, lvl in ipairs(config.LEVELS) do
   end
 end
 
--- stage 2 (teach) on a clear beginner miss: must return prose + a well-formed
--- structured edit, with the corrected code kept OUT of the prose (dedup rule).
+-- stage 2 (teach) on a clear beginner miss: must return a non-empty prose
+-- explanation and NO structured edit (the rewrite is generated lazily in the drill).
 local teach_change = diff.compute({ fixtures.CURATED.beginner[1][1], "    pass", },
   fixtures.CURATED.beginner[1])
 if teach_change then
-  jobs.teach = function(cb) ai.teach(teach_change, "python", "the sum() builtin", cb) end
+  jobs.teach = function(cb) ai.teach("python", "the sum() builtin", cb) end
 end
 
 jobs.explain = function(cb) ai.explain("squares = [x * x for x in range(10)]", "python", cb) end
 
 -- stage-2 drill primitives (live): verify recognizes a clear use of a feature, and
 -- gen_example returns an explanation plus a fenced example.
-jobs.verify_pos = function(cb) ai.verify("result = [x * x for x in xs]", "python", "list comprehension", cb) end
+jobs.verify_pos = function(cb) ai.verify("result = [x * x for x in xs]", "python", "list comprehension", {}, cb) end
 jobs.example = function(cb) ai.gen_example("list comprehension", "python", "analogous", "acc = []\nfor x in xs:\n    acc.append(x * x)", cb) end
 
 local R = gather(jobs, 4)
@@ -559,16 +583,15 @@ do
   end
 end
 
--- stage 2 (teach): prose + a structured edit, with the corrected code kept out
--- of the prose. weak keyless models are noisy, so the no-fence rule is reported
--- as INFO (the dedup PROBE in docs/cascade-refactor.md is the real verification).
+-- stage 2 (teach): a prose explanation only, no structured edit and no fenced code
+-- block (the worked code is withheld for the drill). weak keyless models are noisy,
+-- so the no-fence rule is reported as INFO rather than asserted.
 if teach_change then
   local s = R.teach
   check("teach: returns a non-empty explanation",
     s ~= nil and type(s.summary) == "string" and #s.summary > 0)
   if s then
-    check("teach: any returned edit is well-formed",
-      s.edit == nil or utils.valid_edit(s.edit) ~= nil)
+    check("teach: returns no structured edit (explanation only)", s.edit == nil)
     local fenced = type(s.summary) == "string" and s.summary:find("```") ~= nil
     print("INFO  teach dedup: explanation " .. (fenced and "CONTAINS" or "omits") ..
       " a fenced code block")
