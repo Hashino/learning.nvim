@@ -192,7 +192,7 @@ function Drill.submit(buf)
       escalate(buf, action.phase)
     elseif action.kind == "retry" then
       vim.notify(hint and ("[learning.nvim] incorrect answer: " .. hint)
-        or "[learning.nvim] not quite — keep trying", vim.log.levels.INFO)
+        or "[learning.nvim] incorrect answer: try again", vim.log.levels.INFO)
     end
   end)
 end
