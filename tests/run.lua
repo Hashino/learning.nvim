@@ -100,7 +100,7 @@ end
 do
   local orig_gen, orig_verify = ai.gen_example, ai.verify
   ---@diagnostic disable-next-line: duplicate-set-field
-  ai.gen_example = function(_, _, phase, _, cb) cb({ explanation = "ex", code = { phase, }, }) end
+  ai.gen_example = function(_, _, phase, _, cb) cb({ phase, }) end
   local verify_result = false
   ---@diagnostic disable-next-line: duplicate-set-field
   ai.verify = function(_, _, _, _, cb) cb(verify_result) end
@@ -497,7 +497,7 @@ end
 jobs.explain = function(cb) ai.explain("squares = [x * x for x in range(10)]", "python", cb) end
 
 -- stage-2 drill primitives (live): verify recognizes a clear use of a feature, and
--- gen_example returns an explanation plus a fenced example.
+-- gen_example returns a fenced code example (code only).
 jobs.verify_pos = function(cb) ai.verify("result = [x * x for x in xs]", "python", "list comprehension", {}, cb) end
 jobs.example = function(cb) ai.gen_example("list comprehension", "python", "analogous", "acc = []\nfor x in xs:\n    acc.append(x * x)", cb) end
 
@@ -611,9 +611,9 @@ end
 check("verify: recognizes a clear use of the feature", R.verify_pos == true, tostring(R.verify_pos))
 do
   local e = R.example
-  check("gen_example: returns an explanation and a fenced example",
-    type(e) == "table" and type(e.explanation) == "string" and #e.explanation > 0 and type(e.code) == "table",
-    type(e) == "table" and ("expl=" .. #(e.explanation or "") .. " codes=" .. tostring(e.code and #e.code)) or "nil")
+  check("gen_example: returns a fenced code example (code only)",
+    type(e) == "table" and #e > 0 and type(e[1]) == "string",
+    type(e) == "table" and ("codes=" .. #e) or "nil")
 end
 
 -- ===========================================================================

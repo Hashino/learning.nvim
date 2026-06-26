@@ -72,7 +72,7 @@ the progression probes start from the lowest level.
 - **Explain, relevance** — explaining a distinctive construct names it (a list
   comprehension → "comprehension").
 - **Drill primitives (live)** — `verify` recognizes a clear use of a feature;
-  `gen_example` returns an explanation plus a fenced example.
+  `gen_example` returns a fenced code example (code only).
 - **Progress helpers** (deterministic) — `utils.bar` renders a filled/empty bar;
   `store.progress_summary` reports the tier, known features, and how many sit at
   the current tier; `store.languages` lists tracked languages.

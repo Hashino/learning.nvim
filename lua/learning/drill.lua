@@ -15,10 +15,12 @@ local Drill = {}
 -- { session, snapshot, feature, filetype, ns, m_start, m_end, comment_start,
 --   comment_count, explanation, timer, original, examples, solution, last_code,
 --   want, checking, verify_token }
--- examples: per-phase prefetched { explanation, code } (generated up front from
+-- examples: per-phase prefetched code (string[], generated up front from
 -- `original`); want: the phase to render as soon as its prefetch lands; solution:
 -- the canonical rewrite (the solution example's code), shown last and handed to
 -- verify as a reference; checking/verify_token: in-flight-submit guard.
+-- explanation is the suggestion's prose, set once at start and never changed — only
+-- the fenced code below it swaps as rungs escalate.
 local sessions = {}
 
 local INSTRUCTION =
@@ -84,17 +86,17 @@ local function cleanup(buf)
   end
 end
 
---- renders the HUD (instruction + explanation + the current scaffold example) as a
---- passive, unfocused float so the cursor stays in the code buffer.
+--- renders the HUD (instruction + the frozen explanation + the current scaffold
+--- code) as a passive, unfocused float so the cursor stays in the code buffer. only
+--- `code` changes across rungs; `sess.explanation` is fixed for the whole drill.
 ---@param sess table
----@param example learning.Example
-local function show_hud(sess, example)
-  sess.explanation = example.explanation or sess.explanation or ""
-  -- retain the last real code shown, so a later dropped/empty example reuses it
+---@param code string[]? the rung's code example (nil/empty reuses the last shown)
+local function show_hud(sess, code)
+  -- retain the last real code shown, so a later dropped/empty rung reuses it
   -- instead of blanking the fence (see escalate / the prefetch fallback).
-  if example.code and #example.code > 0 then sess.last_code = example.code end
+  if code and #code > 0 then sess.last_code = code end
   local body = { INSTRUCTION, "", sess.explanation, }
-  local code = (example.code and #example.code > 0) and example.code or sess.last_code
+  code = (code and #code > 0) and code or sess.last_code
   if code and #code > 0 then
     table.insert(body, "")
     table.insert(body, "```" .. sess.filetype)
@@ -277,25 +279,25 @@ function Drill.start(buf, opts)
   pcall(vim.api.nvim_win_set_cursor, 0, { final + 1, 0, })
   arm_timer(buf)
 
-  -- show the explanation immediately so the HUD never opens blank; the example
+  -- show the explanation immediately so the HUD never opens blank; the fenced code
   -- fills in when the analogous prefetch lands (see `want`).
-  show_hud(sess, { explanation = sess.explanation, })
+  show_hud(sess, nil)
 
   -- prefetch all three rungs concurrently. each callback is guarded by session
   -- identity, so a straggler returning after teardown (or a new drill on the same
   -- buffer) is a no-op. the solution rung's code is the canonical answer: shown
   -- last and handed to verify as a reference.
   for _, phase in ipairs({ "analogous", "related", "solution", }) do
-    ai.gen_example(opts.feature, opts.filetype, phase, original_code, function(example)
+    ai.gen_example(opts.feature, opts.filetype, phase, original_code, function(code)
       if sessions[buf] ~= sess then return end
-      if example then
-        sess.examples[phase] = example
-        if phase == "solution" then sess.solution = example.code end
+      if code then
+        sess.examples[phase] = code
+        if phase == "solution" then sess.solution = code end
       end
       if sess.want == phase then
         utils.hide_spinner()
         sess.want = nil
-        show_hud(sess, example or { explanation = sess.explanation, code = sess.last_code, })
+        show_hud(sess, code)
       end
     end)
   end

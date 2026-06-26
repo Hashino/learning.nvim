@@ -300,10 +300,6 @@ end
 ---@field final integer final line of the edit (0-indexed, exclusive)
 ---@field content string[] the content of the edit
 
----@class learning.Example stage-2 drill example for one scaffold phase
----@field explanation string short prose explanation of the feature
----@field code string[] the fenced example lines
-
 -- the before/after region of an edit, the prompt fragment both stages share.
 ---@param diff learning.Diff
 ---@param filetype string
@@ -532,85 +528,57 @@ function AI.verify(code, filetype, feature, ctx, callback)
   end)
 end
 
--- per-phase scaffold instruction for the drill example. each rung escalates BOTH
--- how close the example sits to the learner's code (analogous, a different context
--- so they can't just copy → related, closer → solution, the direct rewrite) AND how
--- much the prose spells out. a learner who has failed has earned MORE help, not
--- less, so detail must ramp up across the rungs, never down — the `escalate` path in
--- learning.drill literally promises "a more detailed explanation". each phase says
--- how much MORE concrete to be so later rungs can't regress to a bare definition.
+-- per-phase scaffold instruction for the drill example. the rungs escalate purely
+-- STRUCTURALLY — how close the example sits to the learner's code (analogous, a
+-- different context so they can't just copy → related, closer → solution, the direct
+-- rewrite). the prose explanation is the suggestion's, frozen for the whole drill
+-- (see learning.drill), so only the code snippet changes across rungs.
 local EXAMPLE_PHASE = {
-  analogous = {
-    code = "Show the feature used in a DIFFERENT, unrelated snippet (NOT the " ..
-      "learner's code), so they must work out how to apply it themselves.",
-    explain = "This is the first, lightest hint. In one or two short sentences, " ..
-      "say what the feature does and when to reach for it. Do not over-explain — " ..
-      "later rungs add the detail.",
-  },
-  related = {
-    code = "Show the feature in a snippet CLOSER to the learner's code (same shape " ..
-      "or domain), but still NOT the exact rewrite.",
-    explain = "The learner already failed once, so give MORE help than before: in " ..
-      "two short paragraphs name the exact construct, walk step by step through how " ..
-      "it maps onto their situation, and call out the mistake they most likely made. " ..
-      "Be strictly more concrete and detailed than the first hint, never less.",
-  },
-  solution = {
-    code = "Show the DIRECT idiomatic rewrite of the learner's own code.",
-    explain = "The learner has failed repeatedly — spell it out fully. In two short " ..
-      "paragraphs explain the rewrite piece by piece: what each part does and why it " ..
-      "is the idiomatic way, so they can see exactly how it works. This is the most " ..
-      "detailed hint of all.",
-  },
+  analogous = "Show the feature used in a DIFFERENT, unrelated snippet (NOT the " ..
+    "learner's code), so they must work out how to apply it themselves.",
+  related = "Show the feature in a snippet CLOSER to the learner's code (same shape " ..
+    "or domain), but still NOT the exact rewrite.",
+  solution = "Show the DIRECT idiomatic rewrite of the learner's own code.",
 }
 
---- (stage-2 drill) the explanation + a fenced example for one scaffold phase.
---- lazy: called per rung, tailored to the learner's current code, so each call
---- stays small and only the rungs they actually reach are paid for. detail ramps
---- up with the rung (see EXAMPLE_PHASE) — a struggling learner gets more, not less.
+--- (stage-2 drill) a fenced CODE example for one scaffold phase — code only, no
+--- prose (the suggestion's explanation is shown unchanged throughout the drill).
+--- lazy: called per rung from the learner's original code, so each call stays small
+--- and the rungs escalate by closeness (see EXAMPLE_PHASE), not by spelling more out.
 ---@param feature string
 ---@param filetype string
 ---@param phase "analogous"|"related"|"solution"
 ---@param code string the learner's code under practice
----@param callback fun(example: learning.Example?)
+---@param callback fun(code: string[]?)
 function AI.gen_example(feature, filetype, phase, code, callback)
   local ph = EXAMPLE_PHASE[phase] or EXAMPLE_PHASE.analogous
   local prompt = table.concat({
     "You are a " .. filetype .. " tutor teaching the feature \"" .. feature .. "\".",
-    "The learner is practicing this feature in an active-recall drill: a sequence of " ..
-    "hints where each one helps MORE than the last.",
-    "\nExample to show: " .. ph.code,
-    "\nExplanation to write: " .. ph.explain,
+    "The learner is practicing this feature in an active-recall drill.",
+    "\nExample to show: " .. ph,
     "\nThe learner's code:\n```" .. filetype .. "\n" .. code .. "\n```\n",
-    "Answer by calling the `example` tool.",
+    "Respond with ONLY " .. filetype .. " code — no prose, no explanatory comments — " ..
+    "by calling the `example` tool.",
   }, "\n")
 
   local anthropic = is_anthropic()
   local tools = {
     make_tool(anthropic, "example",
-      "Provide an explanation and a fenced example of the feature, at the detail " ..
-      "level the prompt asks for this rung.",
+      "Provide a fenced " .. filetype .. " code example of the feature for this rung. " ..
+      "Code only — no prose.",
       {
-        explanation = {
-          type = "string",
-          description = "explanation of the feature at the detail level the prompt " ..
-            "specifies for this rung (briefer early, more thorough later); two short " ..
-            "paragraphs at most",
-        },
-        code = { type = "array", items = { type = "string", }, description = "the example, one string per line", },
+        code = { type = "array", items = { type = "string", },
+          description = "the example, one " .. filetype .. " line per array element; code only", },
       },
-      { "explanation", "code", }),
+      { "code", }),
   }
 
   make_ai_request(prompt, tools, "example", function(args)
-    if type(args) ~= "table" or type(args.explanation) ~= "string" then
+    if type(args) ~= "table" or type(args.code) ~= "table" then
       callback(nil)
       return
     end
-    callback({
-      explanation = args.explanation,
-      code = type(args.code) == "table" and args.code or {},
-    })
+    callback(args.code)
   end)
 end
 
