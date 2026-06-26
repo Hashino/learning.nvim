@@ -1,9 +1,11 @@
 local Diff = {}
 
 ---@class learning.Diff
----@field start integer start line of the change (0-indexed)
+---@field start integer start line of the context block (0-indexed)
 ---@field old_content string[] content of the old lines
 ---@field new_content string[] content of the new lines
+---@field change_start integer first changed line, 0-indexed (no context padding)
+---@field change_final integer one past the last changed line, 0-indexed exclusive
 
 -- how many unchanged lines around the change to send along as context
 local CONTEXT = 10
@@ -77,6 +79,11 @@ function Diff.compute(old, new)
     start = from - 1,
     old_content = vim.list_slice(old, old_from, old_to),
     new_content = vim.list_slice(new, from, to),
+    -- the changed lines themselves (new-buffer coords), no context padding: this
+    -- is the region the drill comments out, derived here instead of round-tripped
+    -- through the model.
+    change_start = new_min - 1,
+    change_final = new_max,
   }
 end
 

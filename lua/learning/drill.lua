@@ -13,7 +13,12 @@ local Drill = {}
 
 -- per-buffer live drill state. shape:
 -- { session, snapshot, feature, filetype, ns, m_start, m_end, comment_start,
---   comment_count, explanation, timer }
+--   comment_count, explanation, timer, original, examples, solution, last_code,
+--   want, checking, verify_token }
+-- examples: per-phase prefetched { explanation, code } (generated up front from
+-- `original`); want: the phase to render as soon as its prefetch lands; solution:
+-- the canonical rewrite (the solution example's code), shown last and handed to
+-- verify as a reference; checking/verify_token: in-flight-submit guard.
 local sessions = {}
 
 local INSTRUCTION =
@@ -85,11 +90,15 @@ end
 ---@param example learning.Example
 local function show_hud(sess, example)
   sess.explanation = example.explanation or sess.explanation or ""
+  -- retain the last real code shown, so a later dropped/empty example reuses it
+  -- instead of blanking the fence (see escalate / the prefetch fallback).
+  if example.code and #example.code > 0 then sess.last_code = example.code end
   local body = { INSTRUCTION, "", sess.explanation, }
-  if example.code and #example.code > 0 then
+  local code = (example.code and #example.code > 0) and example.code or sess.last_code
+  if code and #code > 0 then
     table.insert(body, "")
     table.insert(body, "```" .. sess.filetype)
-    vim.list_extend(body, example.code)
+    vim.list_extend(body, code)
     table.insert(body, "```")
   end
   local k = config.options.keys.drilling
@@ -115,36 +124,58 @@ local function arm_timer(buf)
   end))
 end
 
---- fetches a closer example for `phase` and renders it after a failed submit. the
---- HUD is hidden and the spinner shown by the caller while the request is in
---- flight; this hides the spinner and re-renders the HUD once it returns (falling
---- back to the retained explanation if generation yields nothing, so the drill
---- window never stays hidden). no-op if the drill ended first.
+--- shows the example for `phase` after a failed submit: instantly if its prefetch
+--- (fired in Drill.start) has landed, otherwise the spinner until it does — the
+--- prefetch callback renders it on arrival. no-op if the drill ended first.
 ---@param buf integer
 ---@param phase string
 local function escalate(buf, phase)
   local sess = sessions[buf]
   if not sess then return end
-  local code = table.concat(attempt_lines(sess), "\n")
-  ai.gen_example(sess.feature, sess.filetype, phase, code, function(example)
+  local ready = sess.examples[phase]
+  if ready then
     utils.hide_spinner()
-    local s = sessions[buf]
-    if s then show_hud(s, example or { explanation = s.explanation, }) end
-  end)
+    sess.want = nil
+    show_hud(sess, ready)
+  else
+    -- prefetch still in flight: keep the previous example up under a spinner and
+    -- let the in-flight callback render this phase when it returns.
+    sess.want = phase
+    utils.show_spinner()
+  end
 end
 
 --- the learner asked to be checked: verify their attempt, then act on the verdict.
+--- a verify already in flight (slow provider) isn't ignored — the learner is asked,
+--- natively, whether to cancel it and submit this newer answer instead. each submit
+--- carries a token so a superseded verify's late result is dropped.
 ---@param buf integer
 function Drill.submit(buf)
   local sess = sessions[buf]
   if not sess or not sess.session:is_active() then return end
+
+  if sess.checking then
+    local choice = vim.fn.confirm(
+      "[learning.nvim] a check is still running. submit this answer instead?",
+      "&Submit new\n&Wait", 1)
+    if choice ~= 1 then return end -- keep waiting on the in-flight check
+  end
+
   if sess.session:submit().kind ~= "verify" then return end
   arm_timer(buf)
 
+  sess.checking = true
+  sess.verify_token = (sess.verify_token or 0) + 1
+  local token = sess.verify_token
   local code = table.concat(attempt_lines(sess), "\n")
-  ai.verify(code, sess.filetype, sess.feature, function(ok)
+  local ctx = {
+    original = sess.original,
+    solution = sess.solution and table.concat(sess.solution, "\n") or nil,
+  }
+  ai.verify(code, sess.filetype, sess.feature, ctx, function(ok, hint)
     local s = sessions[buf]
-    if not s then return end
+    if not s or s.verify_token ~= token then return end -- torn down or superseded
+    s.checking = false
     local action = s.session:result(ok)
     if action.kind == "mastered" then
       -- drop the commented reference, keep the learner's idiomatic code
@@ -154,15 +185,14 @@ function Drill.submit(buf)
       vim.notify("[learning.nvim] you learned `" .. s.feature .. "`",
         vim.log.levels.INFO)
     elseif action.kind == "example" then
-      -- wrong, and the scaffold is escalating: tell the learner a closer example
-      -- is coming, hide the now-stale HUD, and show the spinner until it lands.
-      vim.notify("[learning.nvim] your answer is incorrect, generating a more detailed explanation",
-        vim.log.levels.WARN)
-      window.close()
-      utils.show_spinner()
+      -- wrong, and the scaffold is escalating to a closer example (usually already
+      -- prefetched, so the swap is instant).
+      vim.notify(hint and ("[learning.nvim] incorrect answer: " .. hint)
+        or "[learning.nvim] incorrect — here is a closer example", vim.log.levels.WARN)
       escalate(buf, action.phase)
     elseif action.kind == "retry" then
-      vim.notify("[learning.nvim] not quite — keep trying", vim.log.levels.INFO)
+      vim.notify(hint and ("[learning.nvim] incorrect answer: " .. hint)
+        or "[learning.nvim] not quite — keep trying", vim.log.levels.INFO)
     end
   end)
 end
@@ -188,19 +218,20 @@ function Drill.dismiss(buf)
 end
 
 --- opens a drill for `feature` on `buf`: comments the lines the lesson is about
---- (the teach edit's range — not necessarily the whole edit), opens a fresh line
---- below for the learner, shows the analogous example, and binds the drill keys.
+--- (the diff's changed range), opens a fresh line below for the learner, seeds the
+--- HUD with the suggestion's explanation, binds the drill keys, and prefetches all
+--- three scaffold rungs from the original code so escalation feels instant.
 ---@param buf integer
----@param opts { feature: string, edit: learning.Edit, filetype: string }
+---@param opts { feature: string, filetype: string, range: { start: integer, final: integer }, explanation?: string }
 function Drill.start(buf, opts)
   if sessions[buf] or not (vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)) then
     return
   end
 
-  local edit = opts.edit
+  local range = opts.range
   local line_count = vim.api.nvim_buf_line_count(buf)
-  local start = math.max(0, math.min(edit.start, line_count))
-  local final = math.max(start, math.min(edit.final, line_count))
+  local start = math.max(0, math.min(range.start, line_count))
+  local final = math.max(start, math.min(range.final, line_count))
   if final <= start then return end -- nothing to anchor the drill to
 
   local snapshot = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
@@ -211,7 +242,14 @@ function Drill.start(buf, opts)
   local m_start = vim.api.nvim_buf_set_extmark(buf, ns, final, 0, { right_gravity = false, })
   local m_end = vim.api.nvim_buf_set_extmark(buf, ns, final + 1, 0, { right_gravity = true, })
 
-  sessions[buf] = {
+  -- the original (now-commented) lines: every rung is generated from these fixed
+  -- inputs, so all three can be prefetched at once with no dependency on the
+  -- learner's evolving attempt (only verify reads that).
+  local original = {}
+  for i = start + 1, final do original[#original + 1] = snapshot[i] end
+  local original_code = table.concat(original, "\n")
+
+  local sess = {
     buf = buf,
     session = Session.new(opts.feature, config.options.drill_related_after,
       config.options.drill_solution_after),
@@ -223,8 +261,12 @@ function Drill.start(buf, opts)
     m_end = m_end,
     comment_start = start,
     comment_count = final - start,
-    explanation = "",
+    explanation = opts.explanation or "",
+    original = original_code,
+    examples = {},
+    want = "analogous", -- render the first rung as soon as its prefetch lands
   }
+  sessions[buf] = sess
 
   -- bind the drill keys on the CODE buffer (the learner edits here, not the HUD)
   local k = config.options.keys.drilling
@@ -235,12 +277,28 @@ function Drill.start(buf, opts)
   pcall(vim.api.nvim_win_set_cursor, 0, { final + 1, 0, })
   arm_timer(buf)
 
-  -- the original (now-commented) lines are the context the example teaches around
-  local original = {}
-  for i = start + 1, final do original[#original + 1] = snapshot[i] end
-  ai.gen_example(opts.feature, opts.filetype, "analogous", table.concat(original, "\n"), function(example)
-    if sessions[buf] and example then show_hud(sessions[buf], example) end
-  end)
+  -- show the explanation immediately so the HUD never opens blank; the example
+  -- fills in when the analogous prefetch lands (see `want`).
+  show_hud(sess, { explanation = sess.explanation, })
+
+  -- prefetch all three rungs concurrently. each callback is guarded by session
+  -- identity, so a straggler returning after teardown (or a new drill on the same
+  -- buffer) is a no-op. the solution rung's code is the canonical answer: shown
+  -- last and handed to verify as a reference.
+  for _, phase in ipairs({ "analogous", "related", "solution", }) do
+    ai.gen_example(opts.feature, opts.filetype, phase, original_code, function(example)
+      if sessions[buf] ~= sess then return end
+      if example then
+        sess.examples[phase] = example
+        if phase == "solution" then sess.solution = example.code end
+      end
+      if sess.want == phase then
+        utils.hide_spinner()
+        sess.want = nil
+        show_hud(sess, example or { explanation = sess.explanation, code = sess.last_code, })
+      end
+    end)
+  end
 end
 
 return Drill

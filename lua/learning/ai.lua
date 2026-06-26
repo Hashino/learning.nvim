@@ -442,48 +442,32 @@ function AI.evaluate(diff, filetype, callback)
   end)
 end
 
---- STAGE 2 (heavy, only past the gate): teaches the feature stage 1 named and
---- returns the concrete idiomatic rewrite as a structured edit. The explanation
---- must NOT repeat the corrected code — it is rendered separately as a diff.
----@param diff learning.Diff
+--- STAGE 2 (only past the gate): a short, context-free explanation of the feature
+--- stage 1 named. The idiomatic rewrite is NOT produced here — it is generated
+--- lazily in the drill (see AI.gen_example), so a dismissed suggestion never pays
+--- for it. Output depends only on (filetype, feature), so it is cacheable.
 ---@param filetype string filetype of the buffer being edited
 ---@param feature string the feature stage 1 named, taught specifically
 ---@param callback fun(suggestion: learning.Suggestion?)
-function AI.teach(diff, filetype, feature, callback)
+function AI.teach(filetype, feature, callback)
   local prompt = table.concat({
     "You are a language-learning assistant for " .. filetype .. ".\n" ..
-    "Teach the user about this " .. filetype .. " feature: \"" .. feature .. "\". " ..
-    "It is relevant to the edit they just made.\n",
-    region_block(diff, filetype),
-    "\nAnswer by calling the `suggest` tool. Write a concise markdown explanation " ..
-    "of \"" .. feature .. "\" as it applies to the edited lines. The \"edit\" field " ..
-    "replaces buffer lines from \"start\" to \"final\" (0-indexed, \"final\" " ..
-    "exclusive) with \"content\" — include it with the idiomatic rewrite of the " ..
-    "edited lines, anchored at line " .. tostring(diff.start) .. ".\n" ..
-    "IMPORTANT: do NOT put the corrected/rewritten code in the explanation as a " ..
-    "fenced code block — the edit is shown separately as a red/green diff. Describe " ..
-    "the feature in prose (inline `names` are fine); do not repeat the full snippet.",
+    "In two short paragraphs at most, explain the " .. filetype .. " feature \"" ..
+    feature .. "\": what it does and when to reach for it.\n" ..
+    "Answer by calling the `suggest` tool. Describe the feature in prose (inline " ..
+    "`names` are fine); do NOT include a fenced code block — the learner practices " ..
+    "it themselves in a drill, so the worked code is withheld here.",
   }, "\n")
 
   local anthropic = is_anthropic()
   local tools = {
     make_tool(anthropic, "suggest",
-      "Teach the named language feature about the edited lines.",
+      "Explain the named language feature concisely.",
       {
         explanation = {
           type = "string",
-          description = "Concise markdown explanation of the feature, WITHOUT a fenced " ..
-            "code block repeating the corrected lines.",
-        },
-        edit = {
-          type = "object",
-          description = "Concrete idiomatic replacement for the edited lines.",
-          properties = {
-            start = { type = "integer", description = "start line, 0-indexed", },
-            final = { type = "integer", description = "final line, 0-indexed exclusive", },
-            content = { type = "array", items = { type = "string", }, description = "replacement lines", },
-          },
-          required = { "start", "final", "content", },
+          description = "Concise markdown explanation of the feature (two short " ..
+            "paragraphs at most), WITHOUT a fenced code block.",
         },
       },
       { "explanation", }),
@@ -494,65 +478,109 @@ function AI.teach(diff, filetype, feature, callback)
       callback(nil)
       return
     end
-    callback({
-      summary = args.explanation,
-      edit = args.edit,
-    })
+    callback({ summary = args.explanation, })
   end)
 end
 
 --- (stage-2 drill) a cheap yes/no: did the learner's latest code correctly and
 --- idiomatically use `feature`? drives the teach-session state machine, fired
 --- only on an explicit submit (never polled) so it costs one small call per try.
+--- `ctx` carries the original non-idiomatic code and one canonical rewrite as
+--- references, so the judgement is anchored (fewer false rejections) and a wrong
+--- answer comes back with a one-line `hint`.
 ---@param code string the learner's current attempt
 ---@param filetype string
 ---@param feature string
----@param callback fun(uses: boolean)
-function AI.verify(code, filetype, feature, callback)
-  local prompt = table.concat({
+---@param ctx { original?: string, solution?: string } references to judge against
+---@param callback fun(uses: boolean, hint: string?)
+function AI.verify(code, filetype, feature, ctx, callback)
+  ctx = ctx or {}
+  local parts = {
     "You are a " .. filetype .. " tutor. The learner is practicing the feature \"" ..
-    feature .. "\". Judging the code below, did they use \"" .. feature ..
-    "\" correctly and idiomatically?",
-    "\n```" .. filetype .. "\n" .. code .. "\n```\n",
-    "Answer by calling the `verify` tool.",
-  }, "\n")
+    feature .. "\".",
+  }
+  if type(ctx.original) == "string" and ctx.original ~= "" then
+    table.insert(parts, "\nThey were asked to rewrite this code to use the feature:\n```" ..
+      filetype .. "\n" .. ctx.original .. "\n```")
+  end
+  if type(ctx.solution) == "string" and ctx.solution ~= "" then
+    table.insert(parts, "\nOne idiomatic rewrite, for reference only — accept ANY correct " ..
+      "approach, not just this one:\n```" .. filetype .. "\n" .. ctx.solution .. "\n```")
+  end
+  table.insert(parts, "\nTheir attempt:\n```" .. filetype .. "\n" .. code .. "\n```\n")
+  table.insert(parts, "Did they use \"" .. feature .. "\" correctly and idiomatically to " ..
+    "solve THIS problem? Answer by calling the `verify` tool; if they did not, set a " ..
+    "one-sentence `hint` on what is missing or wrong.")
 
   local anthropic = is_anthropic()
   local tools = {
     make_tool(anthropic, "verify",
-      "Report whether the code correctly uses the named feature.",
-      { uses = { type = "boolean", description = "true if the code uses the feature correctly", }, },
+      "Report whether the code correctly uses the named feature, with a hint when it does not.",
+      {
+        uses = { type = "boolean", description = "true if the code uses the feature correctly", },
+        hint = {
+          type = "string",
+          description = "if uses is false, one sentence on what is missing or wrong; omit when true",
+        },
+      },
       { "uses", }),
   }
 
-  make_ai_request(prompt, tools, "verify", function(args)
-    callback(type(args) == "table" and args.uses == true)
+  make_ai_request(table.concat(parts, "\n"), tools, "verify", function(args)
+    if type(args) ~= "table" then return callback(false, nil) end
+    callback(args.uses == true, type(args.hint) == "string" and args.hint or nil)
   end)
 end
 
--- per-phase instruction for the drill example: analogous (a different context, so
--- the learner can't just copy) → related (closer) → solution (the direct rewrite).
+-- per-phase scaffold instruction for the drill example. each rung escalates BOTH
+-- how close the example sits to the learner's code (analogous, a different context
+-- so they can't just copy → related, closer → solution, the direct rewrite) AND how
+-- much the prose spells out. a learner who has failed has earned MORE help, not
+-- less, so detail must ramp up across the rungs, never down — the `escalate` path in
+-- learning.drill literally promises "a more detailed explanation". each phase says
+-- how much MORE concrete to be so later rungs can't regress to a bare definition.
 local EXAMPLE_PHASE = {
-  analogous = "Show the feature used in a DIFFERENT, unrelated snippet (NOT the " ..
-    "learner's code), so they must work out how to apply it themselves.",
-  related = "Show the feature in a snippet CLOSER to the learner's code, but " ..
-    "still not the exact rewrite.",
-  solution = "Show the DIRECT idiomatic rewrite of the learner's own code.",
+  analogous = {
+    code = "Show the feature used in a DIFFERENT, unrelated snippet (NOT the " ..
+      "learner's code), so they must work out how to apply it themselves.",
+    explain = "This is the first, lightest hint. In one or two short sentences, " ..
+      "say what the feature does and when to reach for it. Do not over-explain — " ..
+      "later rungs add the detail.",
+  },
+  related = {
+    code = "Show the feature in a snippet CLOSER to the learner's code (same shape " ..
+      "or domain), but still NOT the exact rewrite.",
+    explain = "The learner already failed once, so give MORE help than before: in " ..
+      "two short paragraphs name the exact construct, walk step by step through how " ..
+      "it maps onto their situation, and call out the mistake they most likely made. " ..
+      "Be strictly more concrete and detailed than the first hint, never less.",
+  },
+  solution = {
+    code = "Show the DIRECT idiomatic rewrite of the learner's own code.",
+    explain = "The learner has failed repeatedly — spell it out fully. In two short " ..
+      "paragraphs explain the rewrite piece by piece: what each part does and why it " ..
+      "is the idiomatic way, so they can see exactly how it works. This is the most " ..
+      "detailed hint of all.",
+  },
 }
 
 --- (stage-2 drill) the explanation + a fenced example for one scaffold phase.
 --- lazy: called per rung, tailored to the learner's current code, so each call
---- stays small and only the rungs they actually reach are paid for.
+--- stays small and only the rungs they actually reach are paid for. detail ramps
+--- up with the rung (see EXAMPLE_PHASE) — a struggling learner gets more, not less.
 ---@param feature string
 ---@param filetype string
 ---@param phase "analogous"|"related"|"solution"
 ---@param code string the learner's code under practice
 ---@param callback fun(example: learning.Example?)
 function AI.gen_example(feature, filetype, phase, code, callback)
+  local ph = EXAMPLE_PHASE[phase] or EXAMPLE_PHASE.analogous
   local prompt = table.concat({
     "You are a " .. filetype .. " tutor teaching the feature \"" .. feature .. "\".",
-    EXAMPLE_PHASE[phase] or EXAMPLE_PHASE.analogous,
-    "Also write a short explanation (at most two short paragraphs) of the feature.",
+    "The learner is practicing this feature in an active-recall drill: a sequence of " ..
+    "hints where each one helps MORE than the last.",
+    "\nExample to show: " .. ph.code,
+    "\nExplanation to write: " .. ph.explain,
     "\nThe learner's code:\n```" .. filetype .. "\n" .. code .. "\n```\n",
     "Answer by calling the `example` tool.",
   }, "\n")
@@ -560,9 +588,15 @@ function AI.gen_example(feature, filetype, phase, code, callback)
   local anthropic = is_anthropic()
   local tools = {
     make_tool(anthropic, "example",
-      "Provide a short explanation and a fenced example of the feature.",
+      "Provide an explanation and a fenced example of the feature, at the detail " ..
+      "level the prompt asks for this rung.",
       {
-        explanation = { type = "string", description = "at most two short paragraphs", },
+        explanation = {
+          type = "string",
+          description = "explanation of the feature at the detail level the prompt " ..
+            "specifies for this rung (briefer early, more thorough later); two short " ..
+            "paragraphs at most",
+        },
         code = { type = "array", items = { type = "string", }, description = "the example, one string per line", },
       },
       { "explanation", "code", }),

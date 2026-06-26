@@ -131,20 +131,23 @@ local function progress_footer(language)
 end
 
 --- shows a teach suggestion: the explanation only — the rewrite is *withheld* so
---- the learner reconstructs it in a drill. `learn` opens the drill on the feature;
---- `dismiss` records a dismissal toward suppression. with no usable edit to anchor
---- a drill it degrades to a dismiss-only note.
+--- the learner reconstructs it in a drill. `learn` opens the drill on the feature
+--- (anchored at the edit's changed range, carried by `change`); `dismiss` records a
+--- dismissal toward suppression. with no range to anchor a drill it degrades to a
+--- dismiss-only note.
 ---@param buf integer
 ---@param filetype string
 ---@param feature string
 ---@param suggestion learning.Suggestion
-function Learning.show_suggestion(buf, filetype, feature, suggestion)
+---@param change learning.Diff the edit that triggered this, for the drill's line range
+function Learning.show_suggestion(buf, filetype, feature, suggestion, change)
   if not suggestion or not suggestion.summary then return end
-  local edit = utils.valid_edit(suggestion.edit)
+  local range = change and { start = change.change_start, final = change.change_final, }
 
   local function on_dismiss() store.record_dismiss(filetype, feature) end
-  local on_learn = edit and function()
-    drill.start(buf, { feature = feature, edit = edit, filetype = filetype, })
+  local on_learn = range and range.final and range.final > range.start and function()
+    drill.start(buf, { feature = feature, filetype = filetype, range = range,
+      explanation = suggestion.summary, })
   end or nil
 
   window.show({
@@ -165,9 +168,13 @@ end
 function Learning.show_reminder(buf, change, filetype, feature, text)
   local function on_dismiss() store.record_dismiss(filetype, feature) end
   local function on_relearn()
-    ai.teach(change, filetype, feature, function(suggestion)
-      local edit = suggestion and utils.valid_edit(suggestion.edit)
-      if edit then drill.start(buf, { feature = feature, edit = edit, filetype = filetype, }) end
+    local range = change and { start = change.change_start, final = change.change_final, }
+    if not (range and range.final and range.final > range.start) then return end
+    ai.teach(filetype, feature, function(suggestion)
+      if suggestion then
+        drill.start(buf, { feature = feature, filetype = filetype, range = range,
+          explanation = suggestion.summary, })
+      end
     end)
   end
 
@@ -353,10 +360,10 @@ local function send_suggestion()
         end
       end)
     else
-      ai.teach(change, filetype, need.feature, function(suggestion)
+      ai.teach(filetype, need.feature, function(suggestion)
         utils.hide_spinner()
         settle()
-        if suggestion then Learning.show_suggestion(buf, filetype, need.feature, suggestion) end
+        if suggestion then Learning.show_suggestion(buf, filetype, need.feature, suggestion, change) end
       end)
     end
   end)
