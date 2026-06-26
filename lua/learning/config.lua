@@ -23,8 +23,8 @@ Config.FREE_PROVIDER = {
 ---@class learning.Config
 ---@field unlock_threshold? number distinct known features at the current top tier to demonstrate before the next tier unlocks (default 3)
 ---@field know_threshold? number times a feature must be demonstrated before it counts as "known" — gates promotion and reminders (default 3)
----@field drill_related_after? number failed drill submits before the shown example escalates to a closer one (default 1)
----@field drill_solution_after? number failed drill submits before the direct solution is shown (default 3)
+---@field drill_related_after? number failed drill submits before the shown example escalates to a closer one (default 2 — two failures on the first rung)
+---@field drill_solution_after? number failed drill submits before the direct solution is shown (default 4 — two more failures on the second rung; the solution rung never ends)
 ---@field drill_timeout_ms? number ms of inactivity before an abandoned drill auto-closes (default 300000)
 ---@field debounce_ms? number debounce interval in ms before sending accumulated edits (default 250)
 ---@field dismiss_threshold? number times a feature must be dismissed before its auto-suggestions are suppressed
@@ -46,11 +46,13 @@ Config.options = {
   unlock_threshold = 3,
   know_threshold = 3,
 
-  -- active-recall drill scaffold: failed submits before the shown example
-  -- escalates (a closer example, then the direct solution), and how long an
-  -- untouched drill lingers before it auto-closes.
-  drill_related_after = 1,
-  drill_solution_after = 3,
+  -- active-recall drill scaffold: the learner must fail TWICE on a rung before it
+  -- escalates — two failures move analogous -> related (at 2), two more move
+  -- related -> solution (at 4); the solution rung has no cap (keep trying until
+  -- mastered, give up, or dismiss). also how long an untouched drill lingers
+  -- before it auto-closes.
+  drill_related_after = 2,
+  drill_solution_after = 4,
   drill_timeout_ms = 300000,
 
   -- after a feature's auto-suggestions are dismissed this many times (for a
