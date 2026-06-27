@@ -112,25 +112,43 @@ function Utils.valid_edit(edit)
   return nil
 end
 
---- the lines of the last visual selection in `buf`, honoring the selection
---- mode (charwise / linewise / blockwise). returns nil when there's no
---- previous selection or it's empty.
+--- the lines of the *current* visual selection in `buf`, honoring the selection
+--- mode (charwise / linewise / blockwise). returns nil when nothing is selected.
+---
+--- the source is chosen by intent, never by sniffing sticky state — `visualmode()`
+--- and the `'<`/`'>` marks both persist for the whole session, so trusting them is
+--- exactly what made explain pick up a *stale* previous selection:
+---  * called from visual mode (a `v`-mode keymap, which runs while still in visual
+---    mode): use the LIVE endpoints `getpos("v")`/`getpos(".")` — the marks here
+---    still hold the *previous* selection.
+---  * called from a command range (`:'<,'>Learning explain`, so `opts.range`): the
+---    cmdline has just left visual mode and set `'<`/`'>` fresh — use the marks.
+---  * anything else (normal mode, no range): there is no current selection; return
+---    nil rather than reading whatever the marks happen to still hold.
 ---@param buf integer
+---@param opts? { range?: integer|boolean } range info from the `:Learning` command
 ---@return string[]?
-function Utils.visual_selection(buf)
-  -- visualmode() returns "" (not nil) when no visual mode has been used yet
-  local mode = vim.fn.visualmode()
-  if mode == "" then return nil end
+function Utils.visual_selection(buf, opts)
+  local m = vim.fn.mode()
+  local in_visual = m == "v" or m == "V" or m == "\22"
 
-  local start_pos = vim.api.nvim_buf_get_mark(buf, "<")
-  local end_pos = vim.api.nvim_buf_get_mark(buf, ">")
-
-  -- fall back to the live selection endpoints if the marks aren't set yet
-  if start_pos[1] == 0 and end_pos[1] == 0 then
+  local mode, start_pos, end_pos
+  if in_visual then
+    mode = m
     local v_start = vim.fn.getpos("v")
     local v_end = vim.fn.getpos(".")
     start_pos = { v_start[2], v_start[3] - 1 }
     end_pos = { v_end[2], v_end[3] - 1 }
+  elseif opts and opts.range and opts.range ~= 0 then
+    -- a manually-typed line range (`:1,2Learning explain`) leaves visualmode() "";
+    -- treat that as linewise.
+    mode = vim.fn.visualmode()
+    if mode == "" then mode = "V" end
+    start_pos = vim.api.nvim_buf_get_mark(buf, "<")
+    end_pos = vim.api.nvim_buf_get_mark(buf, ">")
+    if start_pos[1] == 0 then return nil end
+  else
+    return nil
   end
 
   if mode == "V" then
@@ -148,7 +166,10 @@ function Utils.visual_selection(buf)
   if mode == "v" or mode == "\22" then
     lines[1] = string.sub(lines[1], start_pos[2] + 1)
     if #lines == 1 then
-      lines[#lines] = string.sub(lines[#lines], 1, end_pos[2] - start_pos[2])
+      -- single line: both columns are 0-based and inclusive, so the kept length is
+      -- end - start + 1 (the +1 keeps the char under the cursor; without it the last
+      -- column was dropped).
+      lines[#lines] = string.sub(lines[#lines], 1, end_pos[2] - start_pos[2] + 1)
     else
       lines[#lines] = string.sub(lines[#lines], 1, end_pos[2] + 1)
     end

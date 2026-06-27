@@ -68,7 +68,9 @@ do
   check("store: suppressed_features lists it", vim.tbl_contains(store.suppressed_features(lang), feat))
 end
 
--- explain with no selection: must notify and open no window (visualmode() == "")
+-- explain with no selection, on a pristine session (no visual mode ever used):
+-- must notify and open no window. (the post-stale-selection variant — the actual
+-- bug — is covered in the selection-detection block below.)
 do
   window.close()
   local notified = false
@@ -81,6 +83,114 @@ do
   vim.notify = orig
   check("explain: no selection notifies, opens no window", notified and window.win_id == nil,
     "notified=" .. tostring(notified) .. " win=" .. tostring(window.win_id))
+end
+
+-- selection detection + explain: the source must be the CURRENT selection, never a
+-- stale '<'> mark left from an earlier one (the recurring explain bug). cover the
+-- three legitimate paths — live visual (the README v-mode keymap), a command range
+-- (:'<,'>Learning explain), and a bare normal-mode call with nothing selected.
+do
+  -- run `fn` while a fresh visual selection is live: a v-mode keymap fired via
+  -- feedkeys "x" (synchronous), exactly how the README keymap invokes explain — the
+  -- callback runs while still IN visual mode, with '<'> still holding the *previous*
+  -- selection. the leading <Esc> resets to normal mode so the motions land cleanly.
+  local function in_visual(buf, keys, fn)
+    vim.api.nvim_set_current_buf(buf)
+    vim.keymap.set("v", "X", fn, { buffer = buf, })
+    -- the trailing <Esc> leaves visual mode after fn fires, so the next assertion
+    -- starts from normal mode (and the v-mode map never lingers across visual modes)
+    vim.api.nvim_feedkeys(
+      vim.api.nvim_replace_termcodes("\27" .. keys .. "X\27", true, false, true), "x", false)
+    pcall(vim.keymap.del, "v", "X", { buffer = buf, })
+  end
+
+  local b = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(b, 0, -1, false,
+    { "alpha one", "beta two", "gamma three", "delta four", })
+  vim.api.nvim_set_current_buf(b)
+  -- leave a STALE selection on lines 1-2: '<'> marks + visualmode() are now sticky
+  vim.cmd("normal! ggVj\27")
+
+  -- live linewise selection on lines 3-4 must win over the stale marks
+  local got
+  in_visual(b, "3GVj", function() got = utils.visual_selection(b) end)
+  check("visual_selection: live selection wins over stale '<'> marks",
+    got and #got == 2 and got[1] == "gamma three" and got[2] == "delta four",
+    got and table.concat(got, "|") or "nil")
+
+  -- charwise keeps the full selected columns, including the last one (off-by-one)
+  in_visual(b, "3G0ve", function() got = utils.visual_selection(b) end)
+  check("visual_selection: charwise keeps the full selected columns",
+    got and #got == 1 and got[1] == "gamma", got and table.concat(got, "|") or "nil")
+
+  -- command-range path: out of visual mode, a real range (:'<,'>) reads the marks.
+  -- set them deterministically to lines 1-2 (and land back in normal mode).
+  vim.cmd("normal! ggVj\27")
+  got = utils.visual_selection(b, { range = 2, })
+  check("visual_selection: a command range reads the '<'> marks",
+    got and #got == 2 and got[1] == "alpha one" and got[2] == "beta two",
+    got and table.concat(got, "|") or "nil")
+
+  -- bare normal-mode call (no range): no current selection, so those same marks are
+  -- ignored rather than explained as a stale selection
+  check("visual_selection: no range in normal mode ignores stale marks",
+    utils.visual_selection(b) == nil and utils.visual_selection(b, { range = 0, }) == nil)
+
+  -- explain end-to-end with the model stubbed: the SELECTED code reaches ai.explain
+  -- and a window opens; a no-selection call sends nothing; the init gate fires only
+  -- after a selection passes (so a no-selection call notifies regardless of state).
+  local orig_explain = ai.explain
+  local captured
+  ---@diagnostic disable-next-line: duplicate-set-field
+  ai.explain = function(code, _, cb)
+    captured = code
+    cb({ summary = "EXPLANATION: " .. code, })
+  end
+  local saved_state = learning._state
+  learning._state = "initialized"
+
+  -- capture the window state INSIDE the callback: the helper's trailing <Esc> (which
+  -- leaves visual mode) would otherwise dismiss the just-opened explain float first.
+  window.close()
+  captured = nil
+  local opened = false
+  in_visual(b, "3GVj", function()
+    learning.explain()
+    opened = window.win_id ~= nil
+  end)
+  check("explain: live selection opens a window and sends the selected code",
+    opened and captured == "gamma three\ndelta four",
+    "opened=" .. tostring(opened) .. " code=" .. tostring(captured))
+  window.close()
+
+  -- bare normal-mode explain after a prior selection: stale marks must NOT be sent
+  captured = nil
+  local notified = false
+  local orig_notify = vim.notify
+  ---@diagnostic disable-next-line: unused-vararg
+  vim.notify = function(msg, ...) if tostring(msg):find("no visual selection") then notified = true end end
+  learning.explain()
+  vim.notify = orig_notify
+  check("explain: no selection after a prior one notifies, sends nothing, no window",
+    notified and captured == nil and window.win_id == nil,
+    "notified=" .. tostring(notified) .. " code=" .. tostring(captured))
+
+  -- the init gate fires only after a selection passes: a live selection on an
+  -- uninitialized plugin warns and never reaches the model
+  learning._state = "initializing"
+  captured = nil
+  local warned = false
+  orig_notify = vim.notify
+  ---@diagnostic disable-next-line: unused-vararg
+  vim.notify = function(msg, ...) if tostring(msg):find("initializing") then warned = true end end
+  in_visual(b, "3GVj", function() learning.explain() end)
+  vim.notify = orig_notify
+  check("explain: a selection while uninitialized warns and skips the model",
+    warned and captured == nil and window.win_id == nil,
+    "warned=" .. tostring(warned) .. " code=" .. tostring(captured))
+
+  ai.explain = orig_explain
+  learning._state = saved_state
 end
 
 -- end-to-end window policy (new interaction): a suggestion offers learn + dismiss
@@ -350,7 +460,9 @@ check("valid_edit: non-numeric start rejected", utils.valid_edit({ start = "0", 
 ---@diagnostic disable-next-line: assign-type-mismatch
 check("valid_edit: non-table content rejected", utils.valid_edit({ start = 0, final = 1, content = "x" }) == nil)
 
--- visual_selection extraction (linewise) given real marks + visualmode
+-- visual_selection extraction (linewise) from the '<'> marks, via the command-range
+-- path (:'<,'>Learning explain). out of visual mode the marks are the only source,
+-- and they're trusted only when an explicit range says so.
 do
   local b = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_buf_set_lines(b, 0, -1, false, { "alpha beta", "gamma delta", "epsilon" })
@@ -358,9 +470,12 @@ do
   -- linewise-select lines 1-2 and leave visual (the <Esc> must be in the same
   -- normal! sequence, or the '<'> marks are never set)
   vim.cmd("normal! ggVj\27")
-  local lines = utils.visual_selection(b)
-  check("visual_selection: linewise returns the full selected lines",
+  local lines = utils.visual_selection(b, { range = 2, })
+  check("visual_selection: linewise (command range) returns the full selected lines",
     lines ~= nil and #lines == 2 and lines[1] == "alpha beta" and lines[2] == "gamma delta")
+  -- same stale marks, but no range -> not a current selection
+  check("visual_selection: same marks without a range return nil",
+    utils.visual_selection(b) == nil)
 end
 
 -- store: key normalization, empty-feature no-op

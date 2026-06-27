@@ -210,17 +210,21 @@ local function check_state()
 end
 
 --- explains the current visual selection on demand (`:Learning explain`). a plain,
---- dismiss-only note — no drill, no dismissal recorded.
-function Learning.explain()
-  if not check_state() then return end
+--- dismiss-only note — no drill, no dismissal recorded. `opts.range` carries the
+--- command's range count so explain can tell a real `:'<,'>` invocation from a bare
+--- normal-mode one and never read a stale selection.
+---@param opts? { range?: integer }
+function Learning.explain(opts)
   local buf = vim.api.nvim_get_current_buf()
   if not (vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf)) then return end
 
-  local lines = utils.visual_selection(buf)
+  local lines = utils.visual_selection(buf, opts)
   if not lines then
     vim.notify("[learning.nvim] no visual selection to explain", vim.log.levels.WARN)
     return
   end
+
+  if not check_state() then return end
 
   utils.show_spinner()
   ai.explain(table.concat(lines, "\n"), vim.bo[buf].filetype, function(suggestion)
