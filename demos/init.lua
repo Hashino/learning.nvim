@@ -73,13 +73,13 @@ local function env_provider()
 end
 
 require("learning").setup({
-  -- A generous debounce so the suggestion fires ONCE, after typing stops, on the
-  -- complete function. With a small debounce + a slow provider, a mid-typing edit
-  -- triggers an `assess_need` that's still in flight when InsertLeave fires, so the
-  -- final (complete-code) trigger is dropped by the in-flight guard and no window
-  -- appears. 1500ms is longer than any inter-keystroke gap while typing the demo
-  -- function, so only the post-Escape edit triggers the cascade.
-  debounce_ms = 5000,
+  -- Small debounce to MEASURE the edit->notification latency (see demos/suggest).
+  -- A burst of typing keeps resetting the timer (inter-keystroke gap < debounce),
+  -- so the cascade still fires once, ~debounce after the final keystroke/Escape.
+  -- This is safe with a fast provider (mercury); a slow provider can leave the
+  -- post-Escape `assess_need` racing the in-flight guard. Was 5000ms for the
+  -- drill demo.
+  debounce_ms = 200,
   dismiss_threshold = 2,
   provider = env_provider(),
   keys = {
