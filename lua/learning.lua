@@ -292,12 +292,14 @@ end
 
 -- auto-suggestion pipeline, driven by the autocmds registered in `setup`
 
---- diffs the current buffer against its last snapshot and runs the two-stage
---- cascade: a cheap stage-1 `evaluate` on every edit — which both records what the
---- edit shows the user already knows (advancing their inferred level) and names
---- what it misses — then, only when the deterministic gate (`store.should_teach`)
---- passes, the heavier stage-2 `teach` that produces the shown suggestion. The
---- `learning_pending` guard spans both calls so the gated-out path stays small.
+--- diffs the current buffer against its last snapshot and runs the cascade. stage 1
+--- is split so the notification lands fast: `assess_need` (small, ON the critical
+--- path) names what the edit misses, and we gate on the user's CURRENT stored level
+--- and fire the "going to teach you about X" notification the moment it returns. In
+--- parallel and OFF the critical path, `assess_known` records what the edit shows the
+--- user already knows — advancing their level for FUTURE edits, not this one. Only
+--- when the gate passes do we pay for the heavier stage-2 `teach`/`remind`. The
+--- `learning_pending` guard is released by whichever user-facing path settles.
 local function send_suggestion()
   if not Learning.enabled or Learning._state ~= "initialized" or not utils.should_suggest() then return end
 
@@ -330,15 +332,17 @@ local function send_suggestion()
     end
   end
 
-  ai.evaluate(change, filetype, function(evaluation)
-    if not evaluation then return settle() end
+  ai.assess_need(change, filetype, function(need)
+    if not need then return settle() end
 
-    -- record what the edit DEMONSTRATED first: this may raise the user's level
-    -- enough that a feature missed in the SAME edit now clears the gate.
-    store.record_knowledge(filetype, evaluation.already_knows)
+    -- record what the edit DEMONSTRATED, OFF the critical path: fire-and-forget so
+    -- it never blocks the notification. this advances the user's level for FUTURE
+    -- edits — it does NOT gate this one (the gate below reads the stored level).
+    ai.assess_known(change, filetype, function(known)
+      if known then store.record_knowledge(filetype, known) end
+    end)
 
     -- deterministic gate: skip stage 2 for nothing-to-teach / suppressed / locked
-    local need = evaluation.need_to_learn
     if not store.should_teach(filetype, need.level, need.feature) then
       return settle()
     end

@@ -75,7 +75,7 @@ end
 require("learning").setup({
   -- A generous debounce so the suggestion fires ONCE, after typing stops, on the
   -- complete function. With a small debounce + a slow provider, a mid-typing edit
-  -- triggers an `evaluate` that's still in flight when InsertLeave fires, so the
+  -- triggers an `assess_need` that's still in flight when InsertLeave fires, so the
   -- final (complete-code) trigger is dropped by the in-flight guard and no window
   -- appears. 1500ms is longer than any inter-keystroke gap while typing the demo
   -- function, so only the post-Escape edit triggers the cascade.

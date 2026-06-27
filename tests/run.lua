@@ -155,14 +155,14 @@ end
 -- this is what a single live provider can never exercise — the OTHER shape.
 do
   local t = ai._test
-  -- stage-1 evaluate shape (openai) and stage-2 suggest/teach shape (anthropic)
+  -- stage-1 assess_need shape (openai) and stage-2 suggest/teach shape (anthropic)
   local openai = { choices = { { message = { tool_calls = {
-    { type = "function", ["function"] = { name = "evaluate",
-      arguments = '{"need_to_learn":{"feature":"f-strings","level":"beginner"},"already_knows":[{"feature":"enumerate","level":"intermediate"}]}' }, },
+    { type = "function", ["function"] = { name = "assess_need",
+      arguments = '{"feature":"f-strings","level":"beginner"}' }, },
   }, }, }, }, }
   local oc = t.extract_tool_calls(openai, false)
   check("parse: openai tool_calls extracted",
-    #oc == 1 and oc[1].name == "evaluate" and oc[1].arguments.need_to_learn.level == "beginner")
+    #oc == 1 and oc[1].name == "assess_need" and oc[1].arguments.level == "beginner")
 
   local anthropic = { content = {
     { type = "text", text = "preamble", },
@@ -451,11 +451,11 @@ local function gather(jobs, rounds)
 end
 
 -- before = the function's signature stub, so the diff the model sees is its body.
--- stage 1 (evaluate) is what the level/feature checks exercise; the tier we rank
--- is the MISS it reports (need_to_learn).
-local function evaluate_job(before, after, ft)
+-- stage 1a (assess_need) is what the level/feature checks exercise; the tier we
+-- rank is the MISS it reports.
+local function need_job(before, after, ft)
   local change = diff.compute(before, after)
-  return change, change and function(cb) ai.evaluate(change, ft or "python", cb) end or nil
+  return change, change and function(cb) ai.assess_need(change, ft or "python", cb) end or nil
 end
 
 -- two FRESHLY GENERATED "beginner" edits (novel code each run, via the keyless
@@ -465,9 +465,9 @@ end
 local generated = {}
 for i = 1, 2 do
   local fx = fixtures.fresh("beginner")
-  local change, job = evaluate_job(fx.before, fx.after, fx.ft)
+  local change, job = need_job(fx.before, fx.after, fx.ft)
   generated[i] = {
-    tag = "evaluate[" .. fx.name .. (fx.generated and "" or "/FALLBACK") .. "]",
+    tag = "need[" .. fx.name .. (fx.generated and "" or "/FALLBACK") .. "]",
     change = change,
     job = job,
   }
@@ -481,7 +481,7 @@ for i, fx in ipairs(generated) do
 end
 for _, lvl in ipairs(config.LEVELS) do
   for i, body in ipairs(fixtures.CURATED[lvl]) do
-    local _, job = evaluate_job({ body[1], "    pass", }, body)
+    local _, job = need_job({ body[1], "    pass", }, body)
     if job then jobs[lvl .. i] = job end
   end
 end
@@ -492,6 +492,9 @@ local teach_change = diff.compute({ fixtures.CURATED.beginner[1][1], "    pass",
   fixtures.CURATED.beginner[1])
 if teach_change then
   jobs.teach = function(cb) ai.teach("python", "the sum() builtin", cb) end
+  -- stage 1b (assess_known): the off-path call that records what the edit shows the
+  -- user already knows. its output is a list (possibly empty) of demonstrated features.
+  jobs.known = function(cb) ai.assess_known(teach_change, "python", cb) end
 end
 
 jobs.explain = function(cb) ai.explain("squares = [x * x for x in range(10)]", "python", cb) end
@@ -508,16 +511,19 @@ local R = gather(jobs, 4)
 for i, fx in ipairs(generated) do
   check(fx.tag .. ": fixture is a non-trivial edit", fx.change ~= nil)
   if fx.change then
-    local s = R["gen" .. i]
-    check(fx.tag .. ": returns an evaluation", s ~= nil)
-    if s then
-      local need = s.need_to_learn
-      check(fx.tag .. ": need_to_learn.level is a known tier",
+    local need = R["gen" .. i]
+    check(fx.tag .. ": returns a need", need ~= nil)
+    if need then
+      check(fx.tag .. ": need.level is a known tier",
         type(need) == "table" and type(need.level) == "string" and LEVEL_RANK[need.level] ~= nil,
         need and tostring(need.level) or "nil")
-      check(fx.tag .. ": already_knows is a list", type(s.already_knows) == "table")
     end
   end
+end
+
+-- assess_known returns a list (empty is fine) for a clear beginner edit
+if teach_change then
+  check("assess_known: returns a list", type(R.known) == "table")
 end
 
 -- tier ordering: the curated fixtures should classify in roughly increasing order
@@ -530,8 +536,7 @@ do
   local function cluster(lvl)
     local o = {}
     for i = 1, #fixtures.CURATED[lvl] do
-      local s = R[lvl .. i]
-      local need = s and s.need_to_learn
+      local need = R[lvl .. i]
       if need and type(need.level) == "string" then table.insert(o, LEVEL_RANK[need.level]) end
     end
     return o
@@ -554,14 +559,14 @@ do
     table.concat(detail, " "))
 end
 
--- AI-judged relevance: the evaluate output is non-deterministic, so a model — not
+-- AI-judged relevance: the assess_need output is non-deterministic, so a model — not
 -- code — scores whether the named miss is relevant. lenient: a majority of the
 -- curated beginner misses must name a feature the judge agrees is worth teaching.
 do
   local judged, agreed = 0, 0
   for i, body in ipairs(fixtures.CURATED.beginner) do
     local s = R["beginner" .. i]
-    local feat = s and s.need_to_learn and s.need_to_learn.feature
+    local feat = s and s.feature
     if type(feat) == "string" and feat ~= "" then
       local code = table.concat(body, "\n")
       local ok = fixtures.judge(
@@ -575,11 +580,11 @@ do
     end
   end
   if judged > 0 then
-    print(("INFO  evaluate relevance (AI-judged): %d/%d agreed"):format(agreed, judged))
-    check("evaluate: AI judge finds the named misses relevant (lenient majority)",
+    print(("INFO  assess_need relevance (AI-judged): %d/%d agreed"):format(agreed, judged))
+    check("assess_need: AI judge finds the named misses relevant (lenient majority)",
       agreed * 2 >= judged, ("%d/%d agreed"):format(agreed, judged))
   else
-    print("INFO  evaluate relevance: AI judge unreachable, skipped")
+    print("INFO  assess_need relevance: AI judge unreachable, skipped")
   end
 end
 

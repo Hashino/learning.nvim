@@ -10,3 +10,6 @@ demo/explain-test.gif
 # drill-only quality-check artifacts (not the real demo — see drill-test.tape)
 demo/drill-test.mp4
 demo/drill-test.gif
+
+# untracked scratch space for deferred plans (see PLANS.md)
+PLANS.md

@@ -147,7 +147,7 @@ function Fixtures.fresh(category)
 end
 
 -- hand-curated clean fixtures (each the `after` function body), grouped by the
--- tier the missed feature belongs to. they anchor the live evaluate test: the
+-- tier the missed feature belongs to. they anchor the live assess_need test: the
 -- model should rank these roughly beginner (lowest) → advanced/idiomatic
 -- (highest). the free generator can't reliably produce the higher tiers (it tends
 -- to emit obvious misses), so these are fixed and ordering-verified. Tiers mirror
